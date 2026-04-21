@@ -17,11 +17,11 @@ pub struct HeuristicParams {
 impl Default for HeuristicParams {
     fn default() -> Self {
         Self {
-            macro_win: 1000,
+            macro_win: 1060,
             center_macro_mult: 1.2248424,
-            micro_two: 15,
+            micro_two: 16,
             micro_one: 0,
-            micro_center: 0,
+            micro_center: 1,
             macro_two: 100,
         }
     }
@@ -394,7 +394,7 @@ fn run_train() {
     let mut best_params = HeuristicParams::default();
     let generations = 10;
     let matches_per_gen = 6;
-    let search_depth = 12; // Balanced depth for robust heuristic without being too slow
+    let search_depth = 10; // Proven sweet spot for deep training and reasonable time
 
     for generation_idx in 1..=generations {
         print!("Génération {}/{} (D{})... ", generation_idx, generations, search_depth);
