@@ -394,7 +394,7 @@ fn run_train() {
     let mut best_params = HeuristicParams::default();
     let generations = 10;
     let matches_per_gen = 6;
-    let search_depth = 15; // Extreme depth for ultra-robust heuristic
+    let search_depth = 12; // Balanced depth for robust heuristic without being too slow
 
     for generation_idx in 1..=generations {
         print!("Génération {}/{} (D{})... ", generation_idx, generations, search_depth);
