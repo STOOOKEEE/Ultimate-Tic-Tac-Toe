@@ -1,10 +1,60 @@
 use std::io::{self, Write};
 use std::time::{Instant, Duration};
+use rand::{rng, RngExt};
+use std::env;
+
+#[derive(Clone, Copy, Debug)]
+pub struct HeuristicParams {
+    pub macro_win: i32,
+    pub center_macro_mult: f32,
+    pub micro_two: i32,
+    pub micro_one: i32,
+    pub micro_center: i32,
+    pub macro_two: i32,
+}
+
+impl Default for HeuristicParams {
+    fn default() -> Self {
+        Self {
+            macro_win: 1000,
+            center_macro_mult: 1.5,
+            micro_two: 10,
+            micro_one: 1,
+            micro_center: 0,
+            macro_two: 100,
+        }
+    }
+}
+
+impl HeuristicParams {
+    pub fn mutate(&self) -> Self {
+        let mut r = rng();
+        let mut new = *self;
+        match r.random_range(0..6) {
+            0 => new.macro_win += r.random_range(-200..=200),
+            1 => new.center_macro_mult += r.random_range(-0.5..=0.5),
+            2 => new.micro_two += r.random_range(-5..=5),
+            3 => new.micro_one += r.random_range(-2..=2),
+            4 => new.micro_center += r.random_range(-2..=2),
+            5 => new.macro_two += r.random_range(-50..=50),
+            _ => {}
+        }
+        
+        if new.macro_win < 100 { new.macro_win = 100; }
+        if new.center_macro_mult < 1.0 { new.center_macro_mult = 1.0; }
+        if new.micro_two < 1 { new.micro_two = 1; }
+        if new.micro_one < 0 { new.micro_one = 0; }
+        if new.micro_center < 0 { new.micro_center = 0; }
+        if new.macro_two < 1 { new.macro_two = 1; }
+        
+        new
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Player {
-    X, // Player 1
-    O, // Player 2 (IA or Human)
+    X,
+    O,
 }
 
 impl Player {
@@ -31,16 +81,16 @@ pub enum MacroState {
 
 #[derive(Clone)]
 pub struct Board {
-    pub cells: [[CellState; 9]; 9], // [macro_idx][micro_idx]
+    pub cells: [[CellState; 9]; 9],
     pub macros: [MacroState; 9],
-    pub active_macro: Option<usize>, // None if free to play anywhere
+    pub active_macro: Option<usize>,
     pub current_player: Player,
 }
 
 const WIN_LINES: [[usize; 3]; 8] = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
-    [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
-    [0, 4, 8], [2, 4, 6]             // diags
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],
+    [0, 4, 8], [2, 4, 6]
 ];
 
 impl Board {
@@ -133,10 +183,9 @@ impl Board {
         self.macros.iter().all(|&m| m != MacroState::Empty)
     }
 
-    pub fn evaluate(&self) -> i32 {
+    pub fn evaluate(&self, params: &HeuristicParams) -> i32 {
         let mut score = 0;
 
-        // Check global win
         for line in WIN_LINES.iter() {
             if self.macros[line[0]] != MacroState::Empty &&
                self.macros[line[0]] != MacroState::Draw &&
@@ -148,7 +197,6 @@ impl Board {
             }
         }
 
-        // If game is terminal by full board, check who won most macros
         if self.macros.iter().all(|&m| m != MacroState::Empty) {
             let mut x_macros = 0;
             let mut o_macros = 0;
@@ -161,27 +209,24 @@ impl Board {
             return 0;
         }
 
-        // Evaluate Macros
         for m in 0..9 {
-            let multiplier = if m == 4 { 1.5 } else { 1.0 }; // Center macro is more valuable
+            let multiplier = if m == 4 { params.center_macro_mult } else { 1.0 };
             match self.macros[m] {
-                MacroState::Player(Player::X) => score += (1000.0 * multiplier) as i32,
-                MacroState::Player(Player::O) => score -= (1000.0 * multiplier) as i32,
+                MacroState::Player(Player::X) => score += (params.macro_win as f32 * multiplier) as i32,
+                MacroState::Player(Player::O) => score -= (params.macro_win as f32 * multiplier) as i32,
                 _ => {
-                    // Evaluate micro cells if macro is not decided
-                    let micro_score = self.evaluate_grid(&self.cells[m]);
+                    let micro_score = self.evaluate_grid(&self.cells[m], params);
                     score += (micro_score as f32 * multiplier) as i32;
                 }
             }
         }
 
-        // Evaluate Macro grid potential (2 in a row)
-        score += self.evaluate_macro_potential() * 100;
+        score += self.evaluate_macro_potential() * params.macro_two;
 
         score
     }
 
-    fn evaluate_grid(&self, grid: &[CellState; 9]) -> i32 {
+    fn evaluate_grid(&self, grid: &[CellState; 9], params: &HeuristicParams) -> i32 {
         let mut score = 0;
         for line in WIN_LINES.iter() {
             let mut x_cnt = 0;
@@ -194,13 +239,13 @@ impl Board {
                 }
             }
             if x_cnt > 0 && o_cnt == 0 {
-                score += if x_cnt == 2 { 10 } else { 1 };
+                score += if x_cnt == 2 { params.micro_two } else { params.micro_one };
             } else if o_cnt > 0 && x_cnt == 0 {
-                score -= if o_cnt == 2 { 10 } else { 1 };
+                score -= if o_cnt == 2 { params.micro_two } else { params.micro_one };
             }
         }
-        if grid[4] == CellState::Player(Player::X) { score += 2; }
-        if grid[4] == CellState::Player(Player::O) { score -= 2; }
+        if grid[4] == CellState::Player(Player::X) { score += params.micro_center; }
+        if grid[4] == CellState::Player(Player::O) { score -= params.micro_center; }
         score
     }
 
@@ -228,7 +273,7 @@ impl Board {
             if row % 3 == 0 {
                 println!("  -----------------------");
             }
-            print!("{} ", row + 1); // Row number
+            print!("{} ", row + 1);
             for col in 0..9 {
                 if col % 3 == 0 {
                     print!("| ");
@@ -263,14 +308,14 @@ impl Board {
     }
 }
 
-pub fn minimax(board: &Board, depth: u32, mut alpha: i32, mut beta: i32, is_maximizing: bool, start_time: Instant, max_time: Duration) -> (i32, Option<(usize, usize)>) {
+pub fn minimax(board: &Board, depth: u32, mut alpha: i32, mut beta: i32, is_maximizing: bool, start_time: Instant, max_time: Duration, params: &HeuristicParams) -> (i32, Option<(usize, usize)>) {
     if depth == 0 || board.is_terminal() || start_time.elapsed() >= max_time {
-        return (board.evaluate(), None);
+        return (board.evaluate(params), None);
     }
 
     let moves = board.get_available_moves();
     if moves.is_empty() {
-        return (board.evaluate(), None);
+        return (board.evaluate(params), None);
     }
 
     let mut best_move = None;
@@ -280,7 +325,7 @@ pub fn minimax(board: &Board, depth: u32, mut alpha: i32, mut beta: i32, is_maxi
         for m in moves {
             let mut new_board = board.clone();
             new_board.make_move(m.0, m.1);
-            let (eval, _) = minimax(&new_board, depth - 1, alpha, beta, false, start_time, max_time);
+            let (eval, _) = minimax(&new_board, depth - 1, alpha, beta, false, start_time, max_time, params);
             if eval > max_eval {
                 max_eval = eval;
                 best_move = Some(m);
@@ -296,7 +341,7 @@ pub fn minimax(board: &Board, depth: u32, mut alpha: i32, mut beta: i32, is_maxi
         for m in moves {
             let mut new_board = board.clone();
             new_board.make_move(m.0, m.1);
-            let (eval, _) = minimax(&new_board, depth - 1, alpha, beta, true, start_time, max_time);
+            let (eval, _) = minimax(&new_board, depth - 1, alpha, beta, true, start_time, max_time, params);
             if eval < min_eval {
                 min_eval = eval;
                 best_move = Some(m);
@@ -327,7 +372,125 @@ fn parse_input(input: &str) -> Option<(usize, usize)> {
     Some((macro_idx, micro_idx))
 }
 
+fn play_game(params_x: &HeuristicParams, params_o: &HeuristicParams, display: bool) -> i32 {
+    let mut board = Board::new();
+    let max_depth = 4;
+    let time_limit = Duration::from_millis(50);
+    
+    let mut r = rng();
+    let first_moves = board.get_available_moves();
+    let first_m = first_moves[r.random_range(0..first_moves.len())];
+    board.make_move(first_m.0, first_m.1);
+
+    loop {
+        if board.is_terminal() || board.get_available_moves().is_empty() {
+            let eval = board.evaluate(&HeuristicParams::default());
+            if display { board.print(); }
+            if eval > 500000 { return 1; }
+            if eval < -500000 { return -1; }
+            return 0;
+        }
+        
+        let start = Instant::now();
+        let is_max = board.current_player == Player::X;
+        let current_params = if is_max { params_x } else { params_o };
+        let (_, best_move) = minimax(&board, max_depth, std::i32::MIN, std::i32::MAX, is_max, start, time_limit, current_params);
+        
+        if let Some((m_idx, u_idx)) = best_move {
+            board.make_move(m_idx, u_idx);
+        } else {
+            let moves = board.get_available_moves();
+            if moves.is_empty() { break; }
+            board.make_move(moves[0].0, moves[0].1);
+        }
+    }
+    
+    let eval = board.evaluate(&HeuristicParams::default());
+    if eval > 500000 { 1 } else if eval < -500000 { -1 } else { 0 }
+}
+
+fn run_train() {
+    println!("--- Lancement de l'Entraînement (Recherche Heuristique) ---");
+    let mut best_params = HeuristicParams::default();
+    let generations = 5; 
+    let matches_per_gen = 6;
+    
+    for generation_idx in 1..=generations {
+        println!("Génération {}/{} en cours...", generation_idx, generations);
+        let candidate = best_params.mutate();
+        
+        let mut score_best = 0;
+        let mut score_candidate = 0;
+        
+        for i in 0..matches_per_gen {
+            let (winner, p_x, p_o) = if i % 2 == 0 {
+                (play_game(&best_params, &candidate, false), "Best", "Cand")
+            } else {
+                (play_game(&candidate, &best_params, false), "Cand", "Best")
+            };
+            
+            if (winner == 1 && p_x == "Best") || (winner == -1 && p_o == "Best") {
+                score_best += 1;
+            } else if (winner == 1 && p_x == "Cand") || (winner == -1 && p_o == "Cand") {
+                score_candidate += 1;
+            }
+        }
+        
+        println!("  Résultat: Actuel {} - {} Candidat", score_best, score_candidate);
+        if score_candidate > score_best {
+            println!("  -> ✨ NOUVELLE MEILLEURE HEURISTIQUE ! ✨");
+            best_params = candidate;
+            println!("     {:?}", best_params);
+        }
+    }
+    
+    println!("--- Entraînement terminé ---");
+    println!("Meilleurs paramètres trouvés :");
+    println!("{:#?}", best_params);
+}
+
+fn run_arena() {
+    println!("--- Lancement de l'Arène IA vs IA ---");
+    let mut x_wins = 0;
+    let mut o_wins = 0;
+    let mut draws = 0;
+    let games = 10;
+    let params = HeuristicParams::default();
+
+    for i in 1..=games {
+        println!("Partie {} en cours...", i);
+        let winner = play_game(&params, &params, false);
+        if winner == 1 {
+            x_wins += 1;
+            println!(" -> X Gagne");
+        } else if winner == -1 {
+            o_wins += 1;
+            println!(" -> O Gagne");
+        } else {
+            draws += 1;
+            println!(" -> Égalité");
+        }
+    }
+    
+    println!("--- Résultats ---");
+    println!("Victoires X : {}", x_wins);
+    println!("Victoires O : {}", o_wins);
+    println!("Égalités    : {}", draws);
+}
+
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    
+    if args.len() > 1 {
+        if args[1] == "arena" {
+            run_arena();
+            return;
+        } else if args[1] == "train" {
+            run_train();
+            return;
+        }
+    }
+
     println!("--- Ultimate Tic Tac Toe ---");
     println!("1. Jouer en premier (X)");
     println!("2. Laisser l'IA commencer (O)");
@@ -340,18 +503,19 @@ fn main() {
     
     let human_player = if input.trim() == "2" { Player::O } else { Player::X };
     let ai_player = human_player.opponent();
+    let params = HeuristicParams::default();
     
     let mut board = Board::new();
     
-    let max_depth = 6; // Depth limit to keep it fast
-    let time_limit = Duration::from_secs(2); // 2 seconds per move max
+    let max_depth = 6;
+    let time_limit = Duration::from_secs(2);
     
     loop {
         board.print();
         
         if board.is_terminal() || board.get_available_moves().is_empty() {
             println!("Partie terminée!");
-            let eval = board.evaluate();
+            let eval = board.evaluate(&params);
             if eval > 500000 {
                 println!("Joueur X gagne !");
             } else if eval < -500000 {
@@ -385,7 +549,7 @@ fn main() {
             println!("Tour de l'IA ({:?}). Réflexion en cours...", ai_player);
             let start = Instant::now();
             let is_max = ai_player == Player::X;
-            let (_, best_move) = minimax(&board, max_depth, std::i32::MIN, std::i32::MAX, is_max, start, time_limit);
+            let (_, best_move) = minimax(&board, max_depth, std::i32::MIN, std::i32::MAX, is_max, start, time_limit, &params);
             
             if let Some((m_idx, u_idx)) = best_move {
                 let c = (m_idx % 3) * 3 + (u_idx % 3);

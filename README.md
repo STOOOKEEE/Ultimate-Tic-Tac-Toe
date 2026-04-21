@@ -33,5 +33,17 @@ Assurez-vous d'avoir Rust installé (`rustup`). Puis dans ce dossier :
 cargo run --release
 ```
 
-Le programme affichera la grille de jeu, les coordonnées sont saisies sous le format "Colonne Ligne" (exemple: `5 5` pour jouer au centre de la grille centrale).
-Vous pouvez choisir si l'IA ou vous-même commencez la partie. L'IA chronomètrera son temps de réflexion pour vous garantir une jouabilité fluide.
+## Modes Avancés
+
+Le programme inclut des outils pour tester et améliorer l'IA :
+
+- **Arena** : Fait s'affronter l'IA contre elle-même sur 10 parties pour observer son comportement global.
+  ```bash
+  cargo run --release -- arena
+  ```
+- **Train** : Lance un mini-algorithme génétique qui fait muter l'heuristique et garde la meilleure version. C'est l'outil idéal pour "entraîner" votre IA avant le tournoi.
+  ```bash
+  cargo run --release -- train
+  ```
+
+L'IA actuelle utilise les meilleurs paramètres trouvés lors de nos tests d'entraînement.
