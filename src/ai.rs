@@ -1,4 +1,4 @@
-use crate::game::{Board, HeuristicParams, Move, Player};
+use crate::game::{Board, HeuristicParams, Move, Player, WIN_SCORE};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -6,6 +6,28 @@ use std::time::{Duration, Instant};
 pub(crate) const MAX_SEARCH_DEPTH: u32 = 24;
 
 const MOVE_PRIORITY: [i32; 9] = [2, 1, 2, 1, 3, 1, 2, 1, 2];
+
+const MATE_THRESHOLD: i32 = WIN_SCORE - 1000;
+
+fn score_from_tt(stored: i32, ply: u32) -> i32 {
+    if stored >= MATE_THRESHOLD {
+        stored - ply as i32
+    } else if stored <= -MATE_THRESHOLD {
+        stored + ply as i32
+    } else {
+        stored
+    }
+}
+
+fn score_to_tt(score: i32, ply: u32) -> i32 {
+    if score >= MATE_THRESHOLD {
+        score + ply as i32
+    } else if score <= -MATE_THRESHOLD {
+        score - ply as i32
+    } else {
+        score
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Bound {
@@ -24,6 +46,7 @@ struct TransEntry {
 
 struct SearchContext {
     tt: HashMap<u64, TransEntry>,
+    killer_moves: Vec<[Option<Move>; 2]>,
     timed_out: bool,
 }
 
@@ -31,8 +54,29 @@ impl SearchContext {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             tt: HashMap::with_capacity(capacity),
+            killer_moves: vec![[None, None]; MAX_SEARCH_DEPTH as usize + 8],
             timed_out: false,
         }
+    }
+
+    fn killer_moves_at(&self, ply: u32) -> [Option<Move>; 2] {
+        self.killer_moves
+            .get(ply as usize)
+            .copied()
+            .unwrap_or([None, None])
+    }
+
+    fn record_killer(&mut self, ply: u32, mv: Move) {
+        let Some(slot) = self.killer_moves.get_mut(ply as usize) else {
+            return;
+        };
+
+        if slot[0] == Some(mv) {
+            return;
+        }
+
+        slot[1] = slot[0];
+        slot[0] = Some(mv);
     }
 }
 
@@ -55,6 +99,17 @@ struct SearchOutcome {
     completed: bool,
 }
 
+#[derive(Clone, Copy)]
+struct SearchNode {
+    depth: u32,
+    ply: u32,
+    alpha: i32,
+    beta: i32,
+    is_max: bool,
+    preferred_move: Option<Move>,
+    extensions_left: u32,
+}
+
 pub(crate) struct SearchReport {
     pub(crate) best_move: Option<Move>,
     pub(crate) completed_depth: u32,
@@ -63,11 +118,8 @@ pub(crate) struct SearchReport {
 }
 
 fn minimax(
-    board: &Board,
-    depth: u32,
-    mut alpha: i32,
-    mut beta: i32,
-    is_max: bool,
+    board: &mut Board,
+    mut node: SearchNode,
     config: &SearchConfig<'_>,
     ctx: &mut SearchContext,
 ) -> SearchOutcome {
@@ -80,26 +132,28 @@ fn minimax(
         };
     }
 
-    if let Some(entry) = ctx.tt.get(&board.hash()).copied() {
-        if entry.depth >= depth {
+    let tt_entry = ctx.tt.get(&board.hash()).copied();
+    if let Some(entry) = tt_entry {
+        if entry.depth >= node.depth {
+            let adjusted = score_from_tt(entry.score, node.ply);
             match entry.bound {
                 Bound::Exact => {
                     return SearchOutcome {
-                        score: entry.score,
+                        score: adjusted,
                         best_move: entry.best_move,
                         completed: true,
                     };
                 }
-                Bound::Lower if entry.score >= beta => {
+                Bound::Lower if adjusted >= node.beta => {
                     return SearchOutcome {
-                        score: entry.score,
+                        score: adjusted,
                         best_move: entry.best_move,
                         completed: true,
                     };
                 }
-                Bound::Upper if entry.score <= alpha => {
+                Bound::Upper if adjusted <= node.alpha => {
                     return SearchOutcome {
-                        score: entry.score,
+                        score: adjusted,
                         best_move: entry.best_move,
                         completed: true,
                     };
@@ -109,15 +163,38 @@ fn minimax(
         }
     }
 
-    if depth == 0 || board.is_terminal() {
+    if node.depth == 0
+        && node.extensions_left > 0
+        && !board.is_terminal()
+        && (board.has_immediate_local_win_for_current_player()
+            || board.has_immediate_local_win_for_opponent())
+    {
+        node.depth = 1;
+    }
+
+    if node.depth == 0 || board.is_terminal() {
+        let raw = board.evaluate(config.params);
+        let score = if raw >= MATE_THRESHOLD {
+            raw - node.ply as i32
+        } else if raw <= -MATE_THRESHOLD {
+            raw + node.ply as i32
+        } else {
+            raw
+        };
         return SearchOutcome {
-            score: board.evaluate(config.params),
+            score,
             best_move: None,
             completed: true,
         };
     }
 
-    let mut moves = ordered_moves(board);
+    let killers = ctx.killer_moves_at(node.ply);
+    let mut moves = ordered_moves(
+        board,
+        tt_entry.and_then(|entry| entry.best_move),
+        node.preferred_move,
+        killers,
+    );
     if moves.is_empty() {
         return SearchOutcome {
             score: board.evaluate(config.params),
@@ -126,10 +203,10 @@ fn minimax(
         };
     }
 
-    let original_alpha = alpha;
-    let original_beta = beta;
+    let original_alpha = node.alpha;
+    let original_beta = node.beta;
     let mut best_move = None;
-    let mut best_score = if is_max { i32::MIN } else { i32::MAX };
+    let mut best_score = if node.is_max { i32::MIN } else { i32::MAX };
     let mut completed = true;
 
     for candidate in moves.drain(..) {
@@ -139,31 +216,48 @@ fn minimax(
             break;
         }
 
-        let mut next_board = board.clone();
-        next_board.make_move(candidate.0, candidate.1);
+        let Some(undo) = board.make_move_with_undo(candidate.0, candidate.1) else {
+            continue;
+        };
 
-        let child = minimax(&next_board, depth - 1, alpha, beta, !is_max, config, ctx);
+        let child = minimax(
+            board,
+            SearchNode {
+                depth: node.depth - 1,
+                ply: node.ply + 1,
+                alpha: node.alpha,
+                beta: node.beta,
+                is_max: !node.is_max,
+                preferred_move: None,
+                extensions_left: node.extensions_left.saturating_sub(1),
+            },
+            config,
+            ctx,
+        );
+
+        board.undo_move(undo);
 
         if !child.completed {
             completed = false;
             break;
         }
 
-        if is_max {
+        if node.is_max {
             if child.score > best_score {
                 best_score = child.score;
                 best_move = Some(candidate);
             }
-            alpha = alpha.max(best_score);
+            node.alpha = node.alpha.max(best_score);
         } else {
             if child.score < best_score {
                 best_score = child.score;
                 best_move = Some(candidate);
             }
-            beta = beta.min(best_score);
+            node.beta = node.beta.min(best_score);
         }
 
-        if beta <= alpha {
+        if node.beta <= node.alpha {
+            ctx.record_killer(node.ply, candidate);
             break;
         }
     }
@@ -180,8 +274,8 @@ fn minimax(
         ctx.tt.insert(
             board.hash(),
             TransEntry {
-                depth,
-                score: best_score,
+                depth: node.depth,
+                score: score_to_tt(best_score, node.ply),
                 best_move,
                 bound,
             },
@@ -195,10 +289,86 @@ fn minimax(
     }
 }
 
-fn ordered_moves(board: &Board) -> Vec<Move> {
+const MOVE_SCORE_MACRO_WIN: i32 = 1_000_000;
+const MOVE_SCORE_MACRO_BLOCK: i32 = 650_000;
+const MOVE_SCORE_TT: i32 = 500_000;
+const MOVE_SCORE_PREVIOUS_BEST: i32 = 450_000;
+const MOVE_SCORE_KILLER: i32 = 120_000;
+const MOVE_SCORE_LOCAL_WIN: i32 = 5_000;
+const MOVE_SCORE_SUICIDE: i32 = -100_000;
+const MOVE_SCORE_MACRO_SUICIDE: i32 = -700_000;
+const MOVE_SCORE_FREE_GIFT: i32 = -200;
+
+fn score_candidate_move(
+    board: &Board,
+    mv: Move,
+    tt_move: Option<Move>,
+    preferred_move: Option<Move>,
+    killer_moves: [Option<Move>; 2],
+) -> i32 {
+    let mut score = 0;
+
+    if Some(mv) == tt_move {
+        score += MOVE_SCORE_TT;
+    }
+
+    if Some(mv) == preferred_move {
+        score += MOVE_SCORE_PREVIOUS_BEST;
+    }
+
+    if killer_moves.contains(&Some(mv)) {
+        score += MOVE_SCORE_KILLER;
+    }
+
+    if board.would_complete_macro(mv) {
+        score += MOVE_SCORE_MACRO_WIN;
+    }
+
+    if board.would_block_macro_threat(mv) {
+        score += MOVE_SCORE_MACRO_BLOCK;
+    }
+
+    score += MOVE_PRIORITY[mv.1] * 10 + MOVE_PRIORITY[mv.0];
+
+    if board.would_complete_local(mv) {
+        score += MOVE_SCORE_LOCAL_WIN;
+    }
+
+    if board.move_opens_macro_win_for_opponent(mv) {
+        score += MOVE_SCORE_MACRO_SUICIDE;
+    }
+
+    let opponent = board.current_player().opponent();
+    match board.forced_target_after(mv) {
+        Some(target) => {
+            if board.player_can_win_local(target, opponent) {
+                score += MOVE_SCORE_SUICIDE;
+            }
+        }
+        None => {
+            score += MOVE_SCORE_FREE_GIFT;
+        }
+    }
+
+    score += board.move_tactical_importance(mv).clamp(-10_000, 10_000) / 10;
+    score
+}
+
+fn ordered_moves(
+    board: &Board,
+    tt_move: Option<Move>,
+    preferred_move: Option<Move>,
+    killer_moves: [Option<Move>; 2],
+) -> Vec<Move> {
     let mut moves = board.get_available_moves();
-    moves.sort_by_key(|&(macro_idx, micro_idx)| {
-        Reverse(MOVE_PRIORITY[micro_idx] * 10 + MOVE_PRIORITY[macro_idx])
+    moves.sort_by_key(|&mv| {
+        Reverse(score_candidate_move(
+            board,
+            mv,
+            tt_move,
+            preferred_move,
+            killer_moves,
+        ))
     });
     moves
 }
@@ -219,9 +389,23 @@ pub(crate) fn find_best_move(
     let mut best_move = None;
     let mut completed_depth = 0;
     let is_max = board.current_player() == Player::X;
+    let mut root = board.clone();
 
     for depth in 1..=max_depth {
-        let outcome = minimax(board, depth, i32::MIN, i32::MAX, is_max, &config, &mut ctx);
+        let outcome = minimax(
+            &mut root,
+            SearchNode {
+                depth,
+                ply: 0,
+                alpha: i32::MIN,
+                beta: i32::MAX,
+                is_max,
+                preferred_move: best_move,
+                extensions_left: 1,
+            },
+            &config,
+            &mut ctx,
+        );
 
         if !outcome.completed || ctx.timed_out {
             break;

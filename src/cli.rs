@@ -9,6 +9,7 @@ enum GameMode {
     HumanVsHuman,
     AiVsAi,
     Benchmark,
+    Tournament,
 }
 
 struct AiConfig {
@@ -98,6 +99,12 @@ struct BenchmarkStats {
     opponent_time: Duration,
     main_depth_total: u64,
     opponent_depth_total: u64,
+    main_as_x_wins: usize,
+    main_as_x_losses: usize,
+    main_as_x_draws: usize,
+    main_as_o_wins: usize,
+    main_as_o_losses: usize,
+    main_as_o_draws: usize,
 }
 
 impl BenchmarkStats {
@@ -115,16 +122,43 @@ impl BenchmarkStats {
             opponent_time: Duration::ZERO,
             main_depth_total: 0,
             opponent_depth_total: 0,
+            main_as_x_wins: 0,
+            main_as_x_losses: 0,
+            main_as_x_draws: 0,
+            main_as_o_wins: 0,
+            main_as_o_losses: 0,
+            main_as_o_draws: 0,
         }
     }
 
     fn record_game(&mut self, stats: &GameStats, main_player: Player) {
         self.total_moves += stats.moves;
 
-        match outcome_winner(stats.outcome) {
-            Some(winner) if winner == main_player => self.main_wins += 1,
-            Some(_) => self.opponent_wins += 1,
-            None => self.draws += 1,
+        match (main_player, outcome_winner(stats.outcome)) {
+            (Player::X, Some(winner)) if winner == main_player => {
+                self.main_wins += 1;
+                self.main_as_x_wins += 1;
+            }
+            (Player::X, Some(_)) => {
+                self.opponent_wins += 1;
+                self.main_as_x_losses += 1;
+            }
+            (Player::X, None) => {
+                self.draws += 1;
+                self.main_as_x_draws += 1;
+            }
+            (Player::O, Some(winner)) if winner == main_player => {
+                self.main_wins += 1;
+                self.main_as_o_wins += 1;
+            }
+            (Player::O, Some(_)) => {
+                self.opponent_wins += 1;
+                self.main_as_o_losses += 1;
+            }
+            (Player::O, None) => {
+                self.draws += 1;
+                self.main_as_o_draws += 1;
+            }
         }
 
         match outcome_winner(stats.outcome) {
@@ -152,6 +186,7 @@ pub(crate) fn run() -> io::Result<()> {
         GameMode::HumanVsHuman => run_human_vs_human(),
         GameMode::AiVsAi => run_ai_vs_ai(),
         GameMode::Benchmark => run_benchmark(),
+        GameMode::Tournament => run_tournament(),
     }
 }
 
@@ -287,6 +322,49 @@ fn run_benchmark() -> io::Result<()> {
     Ok(())
 }
 
+fn run_tournament() -> io::Result<()> {
+    let ai_player = read_ai_player()?;
+    let human_player = ai_player.opponent();
+    let time_ms = read_u64_with_default("Budget IA tournoi en ms", 2000)?;
+    let mut board = Board::new();
+    let params = HeuristicParams::default();
+
+    println!("Mode tournoi: l'IA imprime seulement `colonne ligne`.");
+
+    loop {
+        if board.is_terminal() || board.get_available_moves().is_empty() {
+            print_compact_game_result(&board);
+            break;
+        }
+
+        if board.current_player() == ai_player {
+            let report = find_best_move(
+                &board,
+                &params,
+                Duration::from_millis(time_ms.max(1)),
+                MAX_SEARCH_DEPTH,
+            );
+
+            if let Some(best_move) = report.best_move {
+                let (column, row) = move_to_coordinates(best_move);
+                println!("{column} {row}");
+                board.make_move(best_move.0, best_move.1);
+            } else {
+                print_compact_game_result(&board);
+                break;
+            }
+        } else {
+            eprint!("adversaire {human_player}> ");
+            io::stderr().flush()?;
+            if !read_compact_human_move(&mut board)? {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn play_ai_game(
     x_ai: &AiConfig,
     o_ai: &AiConfig,
@@ -355,7 +433,7 @@ fn play_ai_game(
 fn read_game_mode() -> io::Result<GameMode> {
     loop {
         print!(
-            "Mode de jeu ? (1: joueur contre IA, 2: joueur contre joueur, 3: IA contre IA, 4: benchmark): "
+            "Mode de jeu ? (1: joueur contre IA, 2: joueur contre joueur, 3: IA contre IA, 4: benchmark, 5: tournoi): "
         );
         io::stdout().flush()?;
 
@@ -369,7 +447,8 @@ fn read_game_mode() -> io::Result<GameMode> {
             "2" => return Ok(GameMode::HumanVsHuman),
             "3" => return Ok(GameMode::AiVsAi),
             "4" => return Ok(GameMode::Benchmark),
-            _ => println!("Choix invalide. Tapez 1, 2, 3 ou 4."),
+            "5" => return Ok(GameMode::Tournament),
+            _ => println!("Choix invalide. Tapez 1, 2, 3, 4 ou 5."),
         }
     }
 }
@@ -425,6 +504,36 @@ fn read_human_move(board: &mut Board) -> io::Result<bool> {
         }
 
         println!("Coordonnees invalides. La colonne et la ligne doivent etre entre 1 et 9.");
+    }
+}
+
+fn read_compact_human_move(board: &mut Board) -> io::Result<bool> {
+    loop {
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input)? == 0 {
+            return Ok(false);
+        }
+
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        if parts.len() != 2 {
+            eprint!("format colonne ligne> ");
+            io::stderr().flush()?;
+            continue;
+        }
+
+        let parsed_column = parts[0].parse::<usize>();
+        let parsed_row = parts[1].parse::<usize>();
+
+        if let (Ok(column), Ok(row)) = (parsed_column, parsed_row) {
+            if let Some(candidate) = coordinates_to_move(column, row) {
+                if board.make_move(candidate.0, candidate.1) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        eprint!("coup invalide> ");
+        io::stderr().flush()?;
     }
 }
 
@@ -541,6 +650,14 @@ fn print_benchmark_summary(games: usize, stats: &BenchmarkStats) {
         stats.x_wins, stats.o_wins
     );
     println!(
+        "IA principale avec X: {}V / {}D / {}N",
+        stats.main_as_x_wins, stats.main_as_x_losses, stats.main_as_x_draws
+    );
+    println!(
+        "IA principale avec O: {}V / {}D / {}N",
+        stats.main_as_o_wins, stats.main_as_o_losses, stats.main_as_o_draws
+    );
+    println!(
         "Coups moyens par partie: {:.2}",
         stats.total_moves as f64 / games as f64
     );
@@ -554,6 +671,15 @@ fn print_benchmark_summary(games: usize, stats: &BenchmarkStats) {
         average_depth(stats.main_depth_total, stats.main_moves),
         average_depth(stats.opponent_depth_total, stats.opponent_moves)
     );
+}
+
+fn print_compact_game_result(board: &Board) {
+    match board.outcome() {
+        GameOutcome::MacroWin(player) => println!("FIN {player}"),
+        GameOutcome::TieBreakWin { winner, .. } => println!("FIN {winner}"),
+        GameOutcome::Draw { .. } => println!("FIN NUL"),
+        GameOutcome::Ongoing => println!("FIN INCONNUE"),
+    }
 }
 
 fn print_game_result(board: &Board) {
