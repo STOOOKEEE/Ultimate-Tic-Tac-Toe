@@ -1,4 +1,5 @@
 use crate::game::{Board, HeuristicParams, Move, Player, WIN_SCORE};
+use crate::strong;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -379,6 +380,19 @@ pub(crate) fn find_best_move(
     time_limit: Duration,
     max_depth: u32,
 ) -> SearchReport {
+    if max_depth >= MAX_SEARCH_DEPTH {
+        if let Ok(Some(report)) = strong::find_best_move(board, time_limit) {
+            if board.get_available_moves().contains(&report.best_move) {
+                return SearchReport {
+                    best_move: Some(report.best_move),
+                    completed_depth: report.completed_depth,
+                    elapsed: report.elapsed,
+                    cache_size: 0,
+                };
+            }
+        }
+    }
+
     let start = Instant::now();
     let config = SearchConfig {
         start,

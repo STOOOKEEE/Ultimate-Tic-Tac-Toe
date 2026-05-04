@@ -108,6 +108,7 @@ pub(crate) struct Board {
     active_macro: Option<usize>,
     current_player: Player,
     hash: u64,
+    history: Vec<Move>,
 }
 
 #[derive(Clone, Copy)]
@@ -118,6 +119,7 @@ pub(crate) struct MoveUndo {
     previous_active_macro: Option<usize>,
     previous_player: Player,
     previous_hash: u64,
+    previous_history_len: usize,
 }
 
 struct Zobrist {
@@ -156,6 +158,7 @@ impl Board {
             active_macro: None,
             current_player: Player::X,
             hash: ZOBRIST.active_macro[9],
+            history: Vec::with_capacity(81),
         }
     }
 
@@ -165,6 +168,10 @@ impl Board {
 
     pub(crate) fn hash(&self) -> u64 {
         self.hash
+    }
+
+    pub(crate) fn played_moves(&self) -> &[Move] {
+        &self.history
     }
 
     pub(crate) fn get_available_moves(&self) -> Vec<Move> {
@@ -236,6 +243,7 @@ impl Board {
             previous_active_macro: self.active_macro,
             previous_player: self.current_player,
             previous_hash: self.hash,
+            previous_history_len: self.history.len(),
         };
 
         let p_idx = player_index(self.current_player);
@@ -254,6 +262,7 @@ impl Board {
         self.hash ^=
             ZOBRIST.active_macro[old_active] ^ ZOBRIST.active_macro[new_active] ^ ZOBRIST.player;
         self.current_player = self.current_player.opponent();
+        self.history.push((macro_idx, micro_idx));
 
         Some(undo)
     }
@@ -264,6 +273,7 @@ impl Board {
         self.active_macro = undo.previous_active_macro;
         self.current_player = undo.previous_player;
         self.hash = undo.previous_hash;
+        self.history.truncate(undo.previous_history_len);
     }
 
     pub(crate) fn outcome(&self) -> GameOutcome {

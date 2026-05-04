@@ -1,0 +1,42 @@
+#![allow(dead_code)]
+
+use rand::random_range;
+
+use crate::{
+    constants::{CELL_TO_SUBBOARD_INDEX, MAP, WINDOW},
+    core::TicTacToe,
+};
+
+pub fn generate_random_legal_move(game: &TicTacToe) -> u8 {
+    let moves: u128 = generate_moves(&game);
+
+    let pick = random_range(0..moves.count_ones());
+    // skip `pick` set bits
+    let mut remaining = moves;
+    for _ in 0..pick {
+        remaining &= remaining - 1; // clear lowest set bit
+    }
+    let random_move = 1u128 << remaining.trailing_zeros();
+    let random_move_index = random_move.trailing_zeros() as u8;
+    random_move_index
+}
+
+/// Generate all moves and return them into another bitboard.
+pub fn generate_moves(board: &TicTacToe) -> u128 {
+    let occupied = board.bitboard;
+
+    let mask = if let Some(current_focus) = board.current_focus
+        && ((board.full_subboard | board.all_clear) & (1 << board.current_focus.unwrap())) == 0
+    {
+        WINDOW << MAP[current_focus as usize]
+    } else {
+        (0..81u8)
+            .filter(|&i| {
+                let sb = CELL_TO_SUBBOARD_INDEX[i as usize];
+                (board.full_subboard | board.all_clear) & (1 << sb) == 0
+            })
+            .fold(0u128, |acc, i| acc | (1 << i))
+    };
+
+    mask & !occupied
+}
