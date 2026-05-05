@@ -1,0 +1,367 @@
+#![allow(
+    clippy::clone_on_copy,
+    clippy::collapsible_if,
+    clippy::too_many_arguments
+)]
+
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+use crate::{
+    core::{Result, TicTacToe},
+    movegen::generate_moves,
+    network::{DualAccumulator, Network, get_bucket},
+};
+
+#[derive(Default, Clone)]
+enum NodeType {
+    Exact,
+    LowerBound,
+    UpperBound,
+    #[default]
+    None,
+}
+
+#[derive(Default, Clone)]
+pub struct TTEntry {
+    flag: NodeType,
+    depth: i32,
+    value: f32,
+}
+
+#[derive(Clone)]
+pub struct Search {
+    tt: Arc<Mutex<HashMap<u128, TTEntry>>>,
+}
+
+impl Search {
+    pub fn new() -> Self {
+        Self {
+            tt: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn negamax(
+        &mut self,
+        board: &TicTacToe,
+        depth: i32,
+        mut alpha: f32,
+        beta: f32,
+        net: &Network,
+        dual_acc: DualAccumulator,
+        stop: Option<&Arc<AtomicBool>>,
+    ) -> f32 {
+        if let Some(stop_signal) = stop {
+            if stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
+                return 0.0;
+            }
+        }
+
+        let alpha_orig = alpha;
+
+        // Transposition table lookup
+        if let Some(tt_entry) = self.tt.lock().unwrap().get(&board.zobrist_key) {
+            if tt_entry.depth >= depth {
+                match tt_entry.flag {
+                    NodeType::Exact => return tt_entry.value,
+                    NodeType::LowerBound => {
+                        if tt_entry.value >= beta {
+                            return tt_entry.value;
+                        }
+                    }
+                    NodeType::UpperBound => {
+                        if tt_entry.value <= alpha {
+                            return tt_entry.value;
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        // Terminal
+        if board.is_game_over() {
+            return match board.result() {
+                Result::Win => 0.0 - 0.0001 * ((81 - board.ply) as f32), // opponent (last mover) won → current player lost
+                Result::Loss => 1.0 + 0.0001 * ((81 - board.ply) as f32), // unreachable at terminal, but consistent
+                Result::Draw => 0.5,
+            };
+        }
+
+        if depth == 0 {
+            let bucket = get_bucket(board.ply);
+            return net.forward(dual_acc.stm(board.turn), bucket);
+        }
+
+        let mut best_score = f32::NEG_INFINITY;
+        let mut moves = generate_moves(board);
+
+        while moves != 0 {
+            let mv: u8 = moves.trailing_zeros() as u8;
+            moves &= moves - 1;
+
+            let mut child = board.clone();
+            let delta = child.make(mv);
+
+            let mut child_acc = dual_acc;
+            child_acc.apply_delta(net, &delta);
+
+            let score = 1.0
+                - self.negamax(
+                    &child,
+                    depth - 1,
+                    1.0 - beta,
+                    1.0 - alpha,
+                    net,
+                    child_acc,
+                    stop,
+                );
+
+            if score > best_score {
+                best_score = score;
+            }
+            if score > alpha {
+                alpha = score;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+
+        let flag = if best_score <= alpha_orig {
+            NodeType::UpperBound
+        } else if best_score >= beta {
+            NodeType::LowerBound
+        } else {
+            NodeType::Exact
+        };
+
+        self.tt.lock().unwrap().insert(
+            board.zobrist_key,
+            TTEntry {
+                depth,
+                value: best_score,
+                flag,
+            },
+        );
+
+        best_score
+    }
+
+    pub fn think(
+        &mut self,
+        board: &TicTacToe,
+        depth: i32,
+        net: &Network,
+        stop: Option<&Arc<AtomicBool>>,
+    ) -> u8 {
+        let root_acc = DualAccumulator::new(net, board);
+        let mut moves = generate_moves(board);
+        let move_bit: Vec<u8> = {
+            let mut temp = Vec::new();
+            while moves != 0 {
+                let mv: u8 = moves.trailing_zeros() as u8;
+                temp.push(mv);
+                moves &= moves - 1;
+            }
+            temp
+        };
+
+        let (_, best_mv) = move_bit
+            .par_iter()
+            .map(|&mv| {
+                let mut child = board.clone();
+                let delta = child.make(mv);
+
+                let mut child_acc = root_acc;
+                child_acc.apply_delta(net, &delta);
+
+                let mut local_self = self.clone();
+                let score =
+                    1.0 - local_self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc, stop);
+                (score, mv)
+            })
+            .reduce(
+                || (f32::NEG_INFINITY, 0),
+                |(best_score, best_mv), (score, mv)| {
+                    if score > best_score {
+                        (score, mv)
+                    } else {
+                        (best_score, best_mv)
+                    }
+                },
+            );
+
+        best_mv
+    }
+
+    pub fn iterative_deepening_think(
+        &mut self,
+        board: &TicTacToe,
+        net: &Network,
+        duration: Duration,
+    ) -> (Option<u8>, i32) {
+        let deadline = Instant::now() + duration;
+        let mut current_depth = 1;
+        let mut best_mv = None;
+
+        while Instant::now() < deadline {
+            best_mv = Some(self.think(board, current_depth, net, None));
+            current_depth += 1;
+        }
+
+        (best_mv, current_depth)
+    }
+
+    /// Exact-value negamax: no network, no fixed depth. Search runs until every
+    /// branch hits a terminal node or `stop` is flipped. The TT depth field
+    /// stores remaining plies so cached exact entries are always reusable.
+    fn negamax_exact(
+        &mut self,
+        board: &TicTacToe,
+        mut alpha: f32,
+        beta: f32,
+        stop: &Arc<AtomicBool>,
+    ) -> f32 {
+        if stop.load(Ordering::Relaxed) {
+            return 0.5;
+        }
+
+        let alpha_orig = alpha;
+        let remaining = (81 - board.ply) as i32;
+
+        if let Some(tt_entry) = self.tt.lock().unwrap().get(&board.zobrist_key) {
+            if tt_entry.depth >= remaining {
+                match tt_entry.flag {
+                    NodeType::Exact => return tt_entry.value,
+                    NodeType::LowerBound => {
+                        if tt_entry.value >= beta {
+                            return tt_entry.value;
+                        }
+                    }
+                    NodeType::UpperBound => {
+                        if tt_entry.value <= alpha {
+                            return tt_entry.value;
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        if board.is_game_over() {
+            return match board.result() {
+                Result::Win => 0.0,
+                Result::Loss => 1.0,
+                Result::Draw => 0.5,
+            };
+        }
+
+        let mut best_score = f32::NEG_INFINITY;
+        let mut moves = generate_moves(board);
+
+        while moves != 0 {
+            let mv: u8 = moves.trailing_zeros() as u8;
+            moves &= moves - 1;
+
+            let mut child = board.clone();
+            child.make(mv);
+
+            let score = 1.0 - self.negamax_exact(&child, 1.0 - beta, 1.0 - alpha, stop);
+
+            if score > best_score {
+                best_score = score;
+            }
+            if score > alpha {
+                alpha = score;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+
+        // Don't pollute the TT with partial results from an aborted search.
+        if stop.load(Ordering::Relaxed) {
+            return 0.5;
+        }
+
+        let flag = if best_score <= alpha_orig {
+            NodeType::UpperBound
+        } else if best_score >= beta {
+            NodeType::LowerBound
+        } else {
+            NodeType::Exact
+        };
+
+        self.tt.lock().unwrap().insert(
+            board.zobrist_key,
+            TTEntry {
+                depth: remaining,
+                value: best_score,
+                flag,
+            },
+        );
+
+        best_score
+    }
+
+    /// Exact endgame search with a wall-clock budget. Returns the best root
+    /// move and its exact score, or `None` if the budget expired before all
+    /// root moves were resolved.
+    pub fn think_exact(&mut self, board: &TicTacToe, time_budget: Duration) -> Option<(u8, f32)> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_watchdog = Arc::clone(&stop);
+        thread::spawn(move || {
+            thread::sleep(time_budget);
+            stop_watchdog.store(true, Ordering::Relaxed);
+        });
+
+        let mut moves = generate_moves(board);
+        let mut alpha = 0.0f32;
+        let beta = 1.0f32;
+        let mut best_score = f32::NEG_INFINITY;
+        let mut best_mv: u8 = 0;
+
+        while moves != 0 {
+            let mv: u8 = moves.trailing_zeros() as u8;
+            moves &= moves - 1;
+
+            let mut child = board.clone();
+            child.make(mv);
+
+            let score = 1.0 - self.negamax_exact(&child, 1.0 - beta, 1.0 - alpha, &stop);
+
+            if stop.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            if score > best_score {
+                best_score = score;
+                best_mv = mv;
+            }
+            if score > alpha {
+                alpha = score;
+            }
+        }
+
+        Some((best_mv, best_score))
+    }
+}
+
+/// Trigger condition for switching from network play to exact endgame solving.
+/// Either the empty-square hard floor or the cleared-subboards early condition
+/// is sufficient.
+pub fn endgame_trigger(board: &TicTacToe) -> bool {
+    let empty = 81 - board.bitboard.count_ones() as usize;
+    let cleared = board.all_clear.count_ones() as usize;
+    empty < 35 || (cleared >= 4 && empty < 45)
+}

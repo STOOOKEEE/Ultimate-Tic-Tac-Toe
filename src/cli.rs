@@ -1,6 +1,6 @@
-use crate::ai::{MAX_SEARCH_DEPTH, SearchReport, find_best_move};
-use crate::coords::{coordinates_to_move, move_to_coordinates};
-use crate::game::{Board, GameOutcome, HeuristicParams, Player};
+use crate::ai::{SearchReport, find_best_move};
+use crate::coords::{column_row_to_move, move_to_column_row};
+use crate::game::{Board, GameOutcome, Player};
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -15,7 +15,6 @@ enum GameMode {
 struct AiConfig {
     name: String,
     time_limit: Duration,
-    max_depth: u32,
 }
 
 struct GameStats {
@@ -194,7 +193,6 @@ fn run_human_vs_ai() -> io::Result<()> {
     let ai_player = read_ai_player()?;
     let human_player = ai_player.opponent();
     let mut board = Board::new();
-    let params = HeuristicParams::default();
 
     println!("IA: {ai_player} | Joueur: {human_player}");
 
@@ -213,14 +211,14 @@ fn run_human_vs_ai() -> io::Result<()> {
             }
         } else {
             println!("Tour de l'IA ({ai_player}) - Reflexion...");
-            let report = find_best_move(&board, &params, Duration::from_secs(2), MAX_SEARCH_DEPTH);
+            let report = find_best_move(&board, Duration::from_secs(2));
 
             if let Some(best_move) = report.best_move {
-                let (column, row) = move_to_coordinates(best_move);
-                println!("L'IA joue: colonne {column} ligne {row}");
+                let (column, row) = move_to_column_row(best_move);
+                println!("L'IA joue: {column} {row}");
                 println!(
-                    "Temps: {:?} | profondeur complete: {} | cache: {}",
-                    report.elapsed, report.completed_depth, report.cache_size
+                    "Temps: {:?} | profondeur complete: {}",
+                    report.elapsed, report.completed_depth
                 );
                 board.make_move(best_move.0, best_move.1);
             } else {
@@ -257,20 +255,17 @@ fn run_human_vs_human() -> io::Result<()> {
 }
 
 fn run_ai_vs_ai() -> io::Result<()> {
-    let params = HeuristicParams::default();
     let x_ai = AiConfig {
         name: String::from("IA X"),
         time_limit: Duration::from_secs(2),
-        max_depth: MAX_SEARCH_DEPTH,
     };
     let o_ai = AiConfig {
         name: String::from("IA O"),
         time_limit: Duration::from_secs(2),
-        max_depth: MAX_SEARCH_DEPTH,
     };
 
     println!("Mode IA contre IA. Budget: 2 secondes par coup.");
-    let stats = play_ai_game(&x_ai, &o_ai, &params, true);
+    let stats = play_ai_game(&x_ai, &o_ai, true);
     print_ai_game_stats(&stats);
 
     Ok(())
@@ -279,23 +274,18 @@ fn run_ai_vs_ai() -> io::Result<()> {
 fn run_benchmark() -> io::Result<()> {
     let games = read_usize_with_default("Nombre de parties benchmark", 10)?;
     let time_ms = read_u64_with_default("Budget par coup en ms", 100)?;
-    let opponent_depth = read_usize_with_default("Profondeur de l'IA faible adverse", 1)?
-        .min(MAX_SEARCH_DEPTH as usize) as u32;
-    let params = HeuristicParams::default();
     let main_ai = AiConfig {
         name: String::from("IA principale"),
         time_limit: Duration::from_millis(time_ms.max(1)),
-        max_depth: MAX_SEARCH_DEPTH,
     };
     let opponent_ai = AiConfig {
-        name: format!("IA faible P{opponent_depth}"),
+        name: String::from("IA adverse"),
         time_limit: Duration::from_millis(time_ms.max(1)),
-        max_depth: opponent_depth,
     };
     let mut benchmark = BenchmarkStats::new();
 
     println!(
-        "Benchmark: {games} parties, budget {} ms/coup, adversaire profondeur {opponent_depth}.",
+        "Benchmark: {games} parties, budget {} ms/coup.",
         time_ms.max(1)
     );
     println!("L'IA principale alterne entre X et O.");
@@ -312,7 +302,7 @@ fn run_benchmark() -> io::Result<()> {
             (&opponent_ai, &main_ai)
         };
 
-        let stats = play_ai_game(x_ai, o_ai, &params, false);
+        let stats = play_ai_game(x_ai, o_ai, false);
         benchmark.record_game(&stats, main_player);
         print_benchmark_game(game_idx + 1, main_player, &stats);
     }
@@ -327,7 +317,6 @@ fn run_tournament() -> io::Result<()> {
     let human_player = ai_player.opponent();
     let time_ms = read_u64_with_default("Budget IA tournoi en ms", 2000)?;
     let mut board = Board::new();
-    let params = HeuristicParams::default();
 
     println!("Mode tournoi: l'IA imprime seulement `colonne ligne`.");
 
@@ -338,15 +327,10 @@ fn run_tournament() -> io::Result<()> {
         }
 
         if board.current_player() == ai_player {
-            let report = find_best_move(
-                &board,
-                &params,
-                Duration::from_millis(time_ms.max(1)),
-                MAX_SEARCH_DEPTH,
-            );
+            let report = find_best_move(&board, Duration::from_millis(time_ms.max(1)));
 
             if let Some(best_move) = report.best_move {
-                let (column, row) = move_to_coordinates(best_move);
+                let (column, row) = move_to_column_row(best_move);
                 println!("{column} {row}");
                 board.make_move(best_move.0, best_move.1);
             } else {
@@ -365,12 +349,7 @@ fn run_tournament() -> io::Result<()> {
     Ok(())
 }
 
-fn play_ai_game(
-    x_ai: &AiConfig,
-    o_ai: &AiConfig,
-    params: &HeuristicParams,
-    verbose: bool,
-) -> GameStats {
+fn play_ai_game(x_ai: &AiConfig, o_ai: &AiConfig, verbose: bool) -> GameStats {
     let mut board = Board::new();
     let mut stats = GameStats::new();
 
@@ -395,7 +374,7 @@ fn play_ai_game(
             println!("Tour de {} ({player}) - Reflexion...", ai.name);
         }
 
-        let report = find_best_move(&board, params, ai.time_limit, ai.max_depth);
+        let report = find_best_move(&board, ai.time_limit);
         let Some(best_move) = report.best_move else {
             stats.outcome = board.outcome();
             (stats.x_boards, stats.o_boards) = board.local_board_counts();
@@ -406,13 +385,13 @@ fn play_ai_game(
             return stats;
         };
 
-        let (column, row) = move_to_coordinates(best_move);
+        let (column, row) = move_to_column_row(best_move);
 
         if verbose {
-            println!("{} joue: colonne {column} ligne {row}", ai.name);
+            println!("{} joue: {column} {row}", ai.name);
             println!(
-                "Temps: {:?} | profondeur complete: {} | cache: {}",
-                report.elapsed, report.completed_depth, report.cache_size
+                "Temps: {:?} | profondeur complete: {}",
+                report.elapsed, report.completed_depth
             );
         }
 
@@ -490,17 +469,17 @@ fn read_human_move(board: &mut Board) -> io::Result<bool> {
         let parsed_column = parts[0].parse::<usize>();
         let parsed_row = parts[1].parse::<usize>();
 
-        if let (Ok(column), Ok(row)) = (parsed_column, parsed_row) {
-            if let Some(candidate) = coordinates_to_move(column, row) {
-                let player = board.current_player();
-                if board.make_move(candidate.0, candidate.1) {
-                    println!("Joueur {player} joue: colonne {column} ligne {row}");
-                    return Ok(true);
-                }
-
-                println!("Coup invalide: case occupee ou grille imposee non respectee.");
-                continue;
+        if let (Ok(column), Ok(row)) = (parsed_column, parsed_row)
+            && let Some(candidate) = column_row_to_move(column, row)
+        {
+            let player = board.current_player();
+            if board.make_move(candidate.0, candidate.1) {
+                println!("Joueur {player} joue: {column} {row}");
+                return Ok(true);
             }
+
+            println!("Coup invalide: case occupee ou grille imposee non respectee.");
+            continue;
         }
 
         println!("Coordonnees invalides. La colonne et la ligne doivent etre entre 1 et 9.");
@@ -524,12 +503,11 @@ fn read_compact_human_move(board: &mut Board) -> io::Result<bool> {
         let parsed_column = parts[0].parse::<usize>();
         let parsed_row = parts[1].parse::<usize>();
 
-        if let (Ok(column), Ok(row)) = (parsed_column, parsed_row) {
-            if let Some(candidate) = coordinates_to_move(column, row) {
-                if board.make_move(candidate.0, candidate.1) {
-                    return Ok(true);
-                }
-            }
+        if let (Ok(column), Ok(row)) = (parsed_column, parsed_row)
+            && let Some(candidate) = column_row_to_move(column, row)
+            && board.make_move(candidate.0, candidate.1)
+        {
+            return Ok(true);
         }
 
         eprint!("coup invalide> ");
@@ -552,10 +530,10 @@ fn read_usize_with_default(prompt: &str, default: usize) -> io::Result<usize> {
             return Ok(default);
         }
 
-        if let Ok(value) = trimmed.parse::<usize>() {
-            if value > 0 {
-                return Ok(value);
-            }
+        if let Ok(value) = trimmed.parse::<usize>()
+            && value > 0
+        {
+            return Ok(value);
         }
 
         println!("Valeur invalide. Entrez un nombre entier strictement positif.");
@@ -577,10 +555,10 @@ fn read_u64_with_default(prompt: &str, default: u64) -> io::Result<u64> {
             return Ok(default);
         }
 
-        if let Ok(value) = trimmed.parse::<u64>() {
-            if value > 0 {
-                return Ok(value);
-            }
+        if let Ok(value) = trimmed.parse::<u64>()
+            && value > 0
+        {
+            return Ok(value);
         }
 
         println!("Valeur invalide. Entrez un nombre entier strictement positif.");

@@ -1,0 +1,4 @@
+# Keep training data and intermediate weights out of git.
+*
+!.gitignore
+!gen160_weights.bin
