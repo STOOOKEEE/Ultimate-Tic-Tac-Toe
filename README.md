@@ -2,7 +2,7 @@
 
 AI agent for Ultimate Tic Tac Toe, built in Rust for the **Fondement de l'IA** course with Christophe Rodrigues.
 
-Built by **Sofiane Ben Taleb**, [Ramzy Chibani](https://github.com/DZ-Ramzy) and [Armand Séchon](https://github.com/STOOOKEEE).
+Built by [Sofiane Ben Taleb](https://github.com/gamween), [Ramzy Chibani](https://github.com/DZ-Ramzy) and [Armand Séchon](https://github.com/STOOOKEEE).
 
 ---
 
