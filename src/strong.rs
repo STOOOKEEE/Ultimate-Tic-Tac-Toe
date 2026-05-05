@@ -20,14 +20,12 @@ static DEFAULT_NETWORK: LazyLock<Option<Box<Network>>> = LazyLock::new(|| {
     }
 });
 
-pub(crate) fn move_to_square((macro_idx, micro_idx): Move) -> Option<u8> {
-    if macro_idx >= 9 || micro_idx >= 9 {
+pub(crate) fn move_to_square((column, row): Move) -> Option<u8> {
+    if column >= 9 || row >= 9 {
         return None;
     }
 
-    let row = (macro_idx / 3) * 3 + micro_idx / 3;
-    let col = (macro_idx % 3) * 3 + micro_idx % 3;
-    Some((row * 9 + col) as u8)
+    Some((row * 9 + column) as u8)
 }
 
 pub(crate) fn square_to_move(square: u8) -> Option<Move> {
@@ -36,8 +34,8 @@ pub(crate) fn square_to_move(square: u8) -> Option<Move> {
     }
 
     let row = square as usize / 9;
-    let col = square as usize % 9;
-    Some(((row / 3) * 3 + col / 3, (row % 3) * 3 + col % 3))
+    let column = square as usize % 9;
+    Some((column, row))
 }
 
 pub(crate) struct StrongSearchReport {
@@ -90,14 +88,14 @@ impl StrongEngine {
 
         if endgame_trigger(board) {
             let exact_budget = time_limit.min(Duration::from_millis(500));
-            if let Some((best_square, _score)) = self.search.think_exact(board, exact_budget) {
-                if let Some(best_move) = square_to_move(best_square) {
-                    return StrongSearchReport {
-                        best_move,
-                        completed_depth: 81_u32.saturating_sub(board.ply as u32),
-                        elapsed: start.elapsed(),
-                    };
-                }
+            if let Some((best_square, _score)) = self.search.think_exact(board, exact_budget)
+                && let Some(best_move) = square_to_move(best_square)
+            {
+                return StrongSearchReport {
+                    best_move,
+                    completed_depth: 81_u32.saturating_sub(board.ply as u32),
+                    elapsed: start.elapsed(),
+                };
             }
         }
 
@@ -164,16 +162,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn move_square_conversion_round_trips_current_board_coordinates() {
+    fn move_square_conversion_round_trips_column_row_coordinates() {
         assert_eq!(move_to_square((0, 0)), Some(0));
-        assert_eq!(move_to_square((0, 8)), Some(20));
+        assert_eq!(move_to_square((8, 0)), Some(8));
+        assert_eq!(move_to_square((2, 2)), Some(20));
         assert_eq!(move_to_square((4, 4)), Some(40));
         assert_eq!(move_to_square((8, 8)), Some(80));
         assert_eq!(square_to_move(40), Some((4, 4)));
 
-        for macro_idx in 0..9 {
-            for micro_idx in 0..9 {
-                let mv = (macro_idx, micro_idx);
+        for column in 0..9 {
+            for row in 0..9 {
+                let mv = (column, row);
                 let square = move_to_square(mv).expect("move should map to square");
                 assert_eq!(square_to_move(square), Some(mv));
             }
@@ -185,7 +184,7 @@ mod tests {
         let mut board = Board::new();
         let mut engine_board = TicTacToe::new();
 
-        for mv in [(4, 4), (4, 0), (0, 1), (1, 2), (2, 6)] {
+        for mv in [(4, 4), (3, 3), (0, 1), (0, 5), (2, 6)] {
             assert!(board.make_move(mv.0, mv.1));
             engine_board.make(move_to_square(mv).expect("valid square"));
 

@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 
 use bytemuck::{Pod, Zeroable};
 use std::fs;
@@ -279,14 +279,14 @@ impl DualAccumulator {
             1 => (
                 board.side_bitboard ^ board.bitboard, // Cross STM → STM pieces = Cross
                 board.side_bitboard,
-                board.side_clear ^ board.all_clear as u16,
+                board.side_clear ^ board.all_clear,
                 board.side_clear,
             ),
             -1 => (
                 board.side_bitboard,
                 board.side_bitboard ^ board.bitboard, // Circle STM → STM pieces = Circle
                 board.side_clear,
-                board.side_clear ^ board.all_clear as u16,
+                board.side_clear ^ board.all_clear,
             ),
             _ => unreachable!(),
         };
@@ -413,43 +413,5 @@ impl DualAccumulator {
 impl Default for DualAccumulator {
     fn default() -> Self {
         Self { acc: [[0; 128]; 2] }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Legacy single-perspective Accumulator (kept for test ergonomics)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub struct Accumulator(pub [i16; 128]);
-
-impl Accumulator {
-    pub fn new(net: &Network, board: &TicTacToe) -> Self {
-        let stm_features = board.to_features();
-        let mut acc = net.b0;
-        for i in 0..FEATURES_COUNT {
-            if stm_features[i] != 0.0 {
-                for j in 0..128 {
-                    acc[j] += net.w0[j][i];
-                }
-            }
-        }
-        Accumulator(acc)
-    }
-
-    pub fn add_features(&mut self, net: &Network, features: &[usize]) {
-        for &f in features {
-            add_feature(&mut self.0, net, f);
-        }
-    }
-
-    pub fn sub_feature_single(&mut self, net: &Network, feature: usize) {
-        sub_feature(&mut self.0, net, feature);
-    }
-}
-
-impl Default for Accumulator {
-    fn default() -> Self {
-        Self([0; 128])
     }
 }

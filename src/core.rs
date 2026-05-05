@@ -1,8 +1,6 @@
-#![allow(dead_code)]
-
 use crate::constants::{
     CELL_TO_SUBBOARD_BASE, CELL_TO_SUBBOARD_FOCUS, CELL_TO_SUBBOARD_INDEX, CHECKERS,
-    FEATURES_COUNT, FINAL_CHECKERS, MAP, WINDOW,
+    FINAL_CHECKERS, MAP, WINDOW,
 };
 use colored::Colorize;
 use once_cell::sync::Lazy;
@@ -85,8 +83,7 @@ impl TicTacToe {
         self.bitboard ^= 1 << square;
         self.side_bitboard ^= self.bitboard;
 
-        self.zobrist_key ^=
-            ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.turn.clone()))];
+        self.zobrist_key ^= ZOBRIST_TABLE.token_square[Zobrist::get_index((square, self.turn))];
 
         if let Some(board_index) = self.check_board_clear(square) {
             self.all_clear ^= 1 << board_index;
@@ -99,9 +96,9 @@ impl TicTacToe {
             None => self.zobrist_key ^= ZOBRIST_TABLE.token_focus[9],
         }
 
-        self.current_focus =
-            ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.all_clear as u16 == 0)
-                .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
+        self.current_focus = ((1u16 << CELL_TO_SUBBOARD_FOCUS[square as usize]) & self.all_clear
+            == 0)
+            .then_some(CELL_TO_SUBBOARD_FOCUS[square as usize]);
 
         match self.current_focus {
             Some(f) => self.zobrist_key ^= ZOBRIST_TABLE.token_focus[f as usize],
@@ -168,59 +165,12 @@ impl TicTacToe {
         } else if self.check_draw() {
             return Result::Draw;
         }
-        return Result::Loss;
+        Result::Loss
     }
 
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         (self.full_subboard | self.all_clear) == 0b111111111
-    }
-
-    /// Features are always laid out as (STM = side to move, NSTM = opponent):
-    ///   [  0.. 80] STM  piece squares     (81 bits)
-    ///   [ 81..161] NSTM piece squares     (81 bits)
-    ///   [162..170] STM  cleared meta-board (9 bits)
-    ///   [171..179] NSTM cleared meta-board (9 bits)
-    ///   [180..188] all_clear (symmetric)   (9 bits)
-    ///   [189..197] current_focus one-hot   (9 bits)
-    ///   [198]      free-choice flag
-    ///
-    /// Previously, indices 0..81 were always Cross regardless of whose turn it was,
-    /// causing the network to see identical inputs for contradictory targets.
-    pub fn to_features(&self) -> [f32; FEATURES_COUNT] {
-        let mut features = [0.0f32; FEATURES_COUNT];
-
-        // Bitboard invariant after make():
-        //   side_bitboard           = NSTM pieces
-        //   side_bitboard ^ bitboard = STM  pieces
-        let stm_bb = self.side_bitboard ^ self.bitboard;
-        let nstm_bb = self.side_bitboard;
-
-        // Cleared-board invariant (proved by tracing make()):
-        //   stm_clear  = side_clear ^ all_clear
-        //   nstm_clear = side_clear
-        let stm_clear = self.side_clear ^ self.all_clear as u16;
-        let nstm_clear = self.side_clear;
-
-        for i in 0..81 {
-            features[i] = ((stm_bb >> i) & 1) as f32;
-            features[81 + i] = ((nstm_bb >> i) & 1) as f32;
-        }
-        for i in 0..9 {
-            features[162 + i] = ((stm_clear >> i) & 1) as f32;
-            features[171 + i] = ((nstm_clear >> i) & 1) as f32;
-            features[180 + i] = ((self.all_clear >> i) & 1) as f32;
-        }
-        match self.current_focus {
-            Some(f) => {
-                features[189 + f as usize] = 1.0;
-            }
-            None => {
-                features[198] = 1.0;
-            }
-        }
-
-        features
     }
 }
 
@@ -302,7 +252,7 @@ static ZOBRIST_TABLE: Lazy<Zobrist> = Lazy::new(|| {
 
 impl Zobrist {
     fn get_index(play: (u8, Symbol)) -> usize {
-        let offset = match play.1.clone() as i32 {
+        let offset = match play.1 as i32 {
             1 => 0,
             -1 => 1,
             _ => unreachable!(),

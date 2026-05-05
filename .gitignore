@@ -1,5 +1,8 @@
-/target
-*.md
+/target/
 *.log
 bench_input.txt
 .claude/
+.DS_Store
+
+# Notes internes et plans d'agents, non utiles pour le rendu.
+/docs/superpowers/

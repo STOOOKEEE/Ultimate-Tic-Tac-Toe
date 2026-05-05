@@ -1,4 +1,8 @@
-#![allow(dead_code)]
+#![allow(
+    clippy::clone_on_copy,
+    clippy::collapsible_if,
+    clippy::too_many_arguments
+)]
 
 use std::{
     collections::HashMap,
@@ -37,16 +41,12 @@ pub struct TTEntry {
 #[derive(Clone)]
 pub struct Search {
     tt: Arc<Mutex<HashMap<u128, TTEntry>>>,
-    /// External accumulator stack for caller-side incremental updates
-    /// (used in tournament() and similar drivers).
-    pub acc: [DualAccumulator; 81],
 }
 
 impl Search {
     pub fn new() -> Self {
         Self {
             tt: Arc::new(Mutex::new(HashMap::new())),
-            acc: [DualAccumulator::default(); 81],
         }
     }
 
@@ -204,116 +204,6 @@ impl Search {
         best_mv
     }
 
-    pub fn think_training(&mut self, board: &TicTacToe, depth: i32, net: &Network) -> u8 {
-        let temperature = if board.ply < 6 {
-            0.5
-        } else if board.ply < 15 {
-            0.2
-        } else {
-            0.05
-        };
-        self.think_with_noise(board, depth, net, temperature)
-    }
-
-    pub fn think_training_scored(
-        &mut self,
-        board: &TicTacToe,
-        depth: i32,
-        net: &Network,
-    ) -> (u8, f32) {
-        let temperature = if board.ply < 6 {
-            0.5
-        } else if board.ply < 15 {
-            0.2
-        } else {
-            0.05
-        };
-        self.think_with_noise_scored(board, depth, net, temperature)
-    }
-
-    pub fn think_with_noise(
-        &mut self,
-        board: &TicTacToe,
-        depth: i32,
-        net: &Network,
-        temperature: f32,
-    ) -> u8 {
-        self.think_with_noise_scored(board, depth, net, temperature)
-            .0
-    }
-
-    fn think_with_noise_scored(
-        &mut self,
-        board: &TicTacToe,
-        depth: i32,
-        net: &Network,
-        temperature: f32,
-    ) -> (u8, f32) {
-        let root_acc = DualAccumulator::new(net, board);
-
-        let mut moves = generate_moves(board);
-        let mut move_scores = [(0u8, 0f32); 81];
-        let mut count = 0;
-
-        while moves != 0 {
-            let mv = moves.trailing_zeros() as u8;
-            moves &= moves - 1;
-
-            let mut child = board.clone();
-            let delta = child.make(mv);
-
-            let mut child_acc = root_acc;
-            child_acc.apply_delta(net, &delta);
-
-            let score = 1.0 - self.negamax(&child, depth - 1, 0.0, 1.0, net, child_acc, None);
-            move_scores[count] = (mv, score);
-            count += 1;
-        }
-
-        let best_score = move_scores[..count]
-            .iter()
-            .map(|(_, s)| *s)
-            .fold(f32::NEG_INFINITY, f32::max);
-
-        if temperature == 0.0 {
-            let best_mv = move_scores[..count]
-                .iter()
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-                .unwrap()
-                .0;
-            return (best_mv, best_score);
-        }
-
-        // Softmax temperature sampling
-        let weights: Vec<f32> = move_scores[..count]
-            .iter()
-            .map(|(_, s)| ((s - best_score) / temperature).exp())
-            .collect();
-
-        let total: f32 = weights.iter().sum();
-        let mut rng_val = rand::random::<f32>() * total;
-
-        for (i, w) in weights.iter().enumerate() {
-            rng_val -= w;
-            if rng_val <= 0.0 {
-                return (move_scores[i].0, best_score);
-            }
-        }
-
-        (move_scores[..count].last().unwrap().0, best_score)
-    }
-
-    // Iterative deepening is not returning anything as we are not using it in the main search move as no time limit has been imposed.
-    // We are only updating the transposition table here when it's the other player's turn.
-    pub fn iterative_deepening(&mut self, board: &TicTacToe, net: &Network, stop: Arc<AtomicBool>) {
-        let mut current_depth = 1;
-
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-            self.think(board, current_depth, net, Some(&stop.clone()));
-            current_depth += 1;
-        }
-    }
-
     pub fn iterative_deepening_think(
         &mut self,
         board: &TicTacToe,
@@ -464,22 +354,6 @@ impl Search {
         }
 
         Some((best_mv, best_score))
-    }
-
-    /// Background full-tree solve. Runs `negamax_exact` from the current root,
-    /// saturating the TT with the entire reachable game tree. When it returns
-    /// without `stop` having fired, every position descended from `board` has
-    /// an entry in the TT and `solved` is set to true.
-    pub fn solve_background(
-        &mut self,
-        board: &TicTacToe,
-        stop: Arc<AtomicBool>,
-        solved: Arc<AtomicBool>,
-    ) {
-        let _ = self.negamax_exact(board, 0.0, 1.0, &stop);
-        if !stop.load(Ordering::Relaxed) {
-            solved.store(true, Ordering::Relaxed);
-        }
     }
 }
 

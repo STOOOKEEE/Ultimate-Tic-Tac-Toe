@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub const MAP: [u8; 9] = [0, 3, 6, 27, 30, 33, 54, 57, 60];
 pub const WINDOW: u128 = 0b000000111000000111000000111; // the top left sub board
 
@@ -51,15 +49,15 @@ pub const CELL_TO_SUBBOARD_FOCUS: [u8; 81] = {
     let mut i = 0;
     while i < 9 {
         let base = MAP[i] as usize;
-        arr[base] = 0 as u8;
-        arr[base + 1] = 1 as u8;
-        arr[base + 2] = 2 as u8;
-        arr[base + 9] = 3 as u8;
-        arr[base + 10] = 4 as u8;
-        arr[base + 11] = 5 as u8;
-        arr[base + 18] = 6 as u8;
-        arr[base + 19] = 7 as u8;
-        arr[base + 20] = 8 as u8;
+        arr[base] = 0_u8;
+        arr[base + 1] = 1_u8;
+        arr[base + 2] = 2_u8;
+        arr[base + 9] = 3_u8;
+        arr[base + 10] = 4_u8;
+        arr[base + 11] = 5_u8;
+        arr[base + 18] = 6_u8;
+        arr[base + 19] = 7_u8;
+        arr[base + 20] = 8_u8;
         i += 1;
     }
     arr
@@ -90,5 +88,3 @@ pub const FINAL_CHECKERS: [u16; 8] = [
 ];
 
 pub const FEATURES_COUNT: usize = 199;
-
-pub const TRAINING_DEPTH: i32 = 4;
