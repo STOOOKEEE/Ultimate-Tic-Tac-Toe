@@ -1,35 +1,151 @@
-# Ultimate Tic Tac Toe - IA
+# Ultimate Tic Tac Toe
 
-Projet Rust d'Ultimate Tic Tac Toe pour le module de Fondements de l'IA.
+AI agent for Ultimate Tic Tac Toe, built in Rust for the **Fondement de l'IA** course with Christophe Rodrigues.
 
-## Objectif
+Built by **Sofiane Ben Taleb**, [Ramzy Chibani](https://github.com/DZ-Ramzy) and [Armand Séchon](https://github.com/STOOOKEEE).
 
-Le programme permet de jouer a l'Ultimate Tic Tac Toe contre une IA, de faire jouer deux IA entre elles et de lancer des benchmarks rapides. L'IA utilise une seule methode de decision: le moteur fort inspire du depot public `jojo2504/ultimate-tic-tac-toe`, avec recherche Negamax/Alpha-Beta, approfondissement iteratif, table de transposition et evaluation NNUE via `databin/gen160_weights.bin`.
+---
 
-## Regles implementees
+## The Problem
 
-- Plateau global de 9 x 9 cases, organise en 9 grilles de morpion 3 x 3.
-- Les coups sont saisis en `colonne ligne`, avec des valeurs de 1 a 9.
-- `X` commence toujours la partie; au lancement, on choisit si l'IA ou le joueur prend `X`.
-- Le coup precedent impose la petite grille du prochain coup.
-- Si la petite grille imposee est deja gagnee ou pleine, le joueur peut jouer dans n'importe quelle petite grille encore jouable.
-- Une petite grille gagnee ou pleine ne peut plus recevoir de coup.
-- La partie s'arrete des qu'un joueur aligne 3 petites grilles gagnees sur le plateau global.
-- Si le plateau est complet sans alignement global, le programme applique le departage du sujet: le joueur avec le plus de petites grilles gagnees remporte le combat; egalite si les deux scores sont identiques.
+Ultimate Tic Tac Toe is much harder to solve than classic Tic Tac Toe. The board contains nine local 3x3 boards arranged into one global 3x3 board. Each move not only places a symbol, but also constrains where the opponent must play next.
 
-## Lancer le projet
+The assignment requires an AI that can play complete matches without bugs, respect the official rules, and make decisions quickly enough during timed battles. Brute force is not realistic: the game tree is too large, and the quality of the AI depends on the balance between search depth, evaluation quality and execution speed.
+
+The subject also imposes an important constraint: the AI must not use a move dictionary. Every decision must be computed from the current board state.
+
+## The Solution
+
+This project implements a single strong AI method inspired by the public repository [`jojo2504/ultimate-tic-tac-toe`](https://github.com/jojo2504/ultimate-tic-tac-toe).
+
+The AI uses:
+
+- **Negamax / Minimax search** with **Alpha-Beta pruning**
+- **Iterative deepening** to use the available time per move
+- **Transposition table** to reuse already evaluated positions
+- **Bitboard move generation** for fast legal move computation
+- **NNUE-style evaluation weights** stored in `databin/gen160_weights.bin`
+
+There is no fallback heuristic and no move dictionary. Legal moves are generated from the current board, then evaluated through search.
+
+## Rules Implemented
+
+The implementation follows the rules from `IA-5.pdf` and the standard Ultimate Tic Tac Toe rules described on [Wikipedia](https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe):
+
+- The game is played on a 9x9 grid, divided into nine 3x3 local boards.
+- Players alternate turns. `X` starts.
+- A move is entered as `column row`, both from 1 to 9.
+- The previous move sends the opponent to the corresponding local board.
+- If the forced local board is already won or full, the next player may play in any playable local board.
+- A won or full local board cannot receive new moves.
+- A player wins by winning three local boards aligned on the global board.
+- If the board is full and no global alignment exists, the subject tie-break is applied: the player with the most won local boards wins. If both players won the same number of local boards, the game is a draw.
+
+## How It Works
+
+```text
+User / Tournament input
+   |
+   v
+CLI parser
+   |
+   v
+Rule engine (src/game.rs)
+   |-- validates moves
+   |-- tracks forced local board
+   |-- detects local wins, global wins and tie-breaks
+   |
+   v
+AI wrapper (src/ai.rs)
+   |
+   v
+Strong engine adapter (src/strong.rs)
+   |
+   v
+Bitboard engine
+   |-- move generation
+   |-- Negamax / Alpha-Beta
+   |-- iterative deepening
+   |-- transposition table
+   |-- NNUE evaluation
+   |
+   v
+Best legal move: column row
+```
+
+## Why This Approach
+
+The subject recommends Minimax with Alpha-Beta pruning, while warning that exploring the full tree is not practical. Wikipedia also highlights that Ultimate Tic Tac Toe is difficult for computers because it has a large branching factor and no simple universal evaluation function.
+
+Our implementation addresses this with a time-limited search engine: iterative deepening searches progressively deeper and always keeps the best completed result. Alpha-Beta pruning removes branches that cannot improve the decision. The transposition table avoids recomputing equivalent states. The NNUE-style evaluator replaces a hand-written tactical score with a stronger position evaluation.
+
+## Tech Stack
+
+| Layer | Technology |
+|------|------------|
+| Language | Rust |
+| Game interface | Terminal CLI |
+| Search | Negamax / Minimax with Alpha-Beta pruning |
+| Time management | Iterative deepening |
+| Board representation | 9x9 rule board + bitboard engine adapter |
+| Evaluation | NNUE-style weights |
+| Parallelism | Rayon |
+| Dependencies | `anyhow`, `bytemuck`, `colored`, `once_cell`, `rand`, `rayon` |
+
+## Project Structure
+
+```text
+Ultimate-Tic-Tac-Toe/
+├── src/
+│   ├── main.rs        # Program entry point
+│   ├── cli.rs         # Text interface and game modes
+│   ├── game.rs        # Official game rules and board state
+│   ├── coords.rs      # User coordinate conversion
+│   ├── ai.rs          # Single public AI entry point
+│   ├── strong.rs      # Adapter to the strong engine
+│   ├── core.rs        # Bitboard game state
+│   ├── movegen.rs     # Legal move generation
+│   ├── search.rs      # Negamax, Alpha-Beta, iterative deepening
+│   ├── network.rs     # NNUE-style evaluation network
+│   └── constants.rs   # Bitboard masks and constants
+├── databin/
+│   └── gen160_weights.bin
+├── IA-5.pdf
+├── Cargo.toml
+└── README.md
+```
+
+## Getting Started
+
+### Prerequisites
+
+Install Rust with [`rustup`](https://rustup.rs/).
+
+### Run
 
 ```bash
 cargo run --release
 ```
 
-Le menu propose:
+The `--release` flag is important. The AI is search-heavy, and debug builds are much slower.
 
-1. joueur contre IA
-2. joueur contre joueur
-3. IA contre IA
-4. benchmark
-5. mode tournoi, qui affiche seulement les coups de l'IA au format `colonne ligne`
+### Menu
+
+The program provides:
+
+1. Player vs AI
+2. Player vs player
+3. AI vs AI
+4. Benchmark
+5. Tournament mode
+
+Tournament mode prints only the AI move in the required `column row` format.
+
+## Time Per Move
+
+The default AI budget is 2 seconds per move in normal play and AI-vs-AI mode. Tournament mode asks for the move budget in milliseconds, with a default of 2000 ms.
+
+A higher budget allows the iterative deepening search to complete deeper levels. For competition, 2000 ms is a strong default if the rules allow it. If the timing is strict, using a slightly lower value such as 1800 ms gives a safety margin.
 
 ## Tests
 
@@ -37,18 +153,32 @@ Le menu propose:
 cargo test
 ```
 
-Les tests couvrent notamment la conversion des coordonnees, la grille imposee, la liberation vers un choix libre quand la grille cible est decidee, l'interdiction de jouer dans une grille decidee, l'arret apres victoire globale et le departage sur plateau complet.
+The tests cover:
 
-## Structure
+- coordinate conversion in `column row` order
+- forced local board behavior
+- free choice when the target board is won or full
+- illegal moves in decided boards
+- local board wins
+- global board wins
+- rejection of moves after a finished game
+- tie-break on full board
+- consistency between the rule board and the bitboard engine move generator
 
-- `src/game.rs`: etat du plateau, validation des coups, regles et tests de regles.
-- `src/ai.rs`: selection du meilleur coup via le moteur fort uniquement.
-- `src/strong.rs`: adaptateur entre le plateau principal et le moteur fort.
-- `src/core.rs`, `src/movegen.rs`, `src/search.rs`, `src/network.rs`, `src/constants.rs`: moteur fort bitboard, generation des coups, recherche et evaluation NNUE.
-- `src/coords.rs`: conversion entre saisie utilisateur 1..9 et coordonnees internes 0..8.
-- `src/cli.rs`: interface texte et modes de jeu.
-- `src/main.rs`: point d'entree.
+Additional checks used during cleanup:
 
-## Notes d'implementation
+```bash
+cargo fmt -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release
+```
 
-Le moteur ne contient pas de dictionnaire de coups. Les coups sont generes legalement depuis l'etat courant, puis evalues par recherche a la volee. Le fichier de poids sert uniquement a l'evaluation du moteur fort; il doit etre present pour que l'IA joue.
+## Sources
+
+- Course subject: `IA-5.pdf`
+- Rules reference: https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe
+- Strong engine inspiration: https://github.com/jojo2504/ultimate-tic-tac-toe
+
+## Notes
+
+The file `databin/gen160_weights.bin` is required. It contains evaluation weights for the strong engine. It is not a move dictionary: the AI still computes legal moves and searches from the current position at runtime.

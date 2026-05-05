@@ -6,3 +6,6 @@ bench_input.txt
 
 # Notes internes et plans d'agents, non utiles pour le rendu.
 /docs/superpowers/
+
+# Rapport LaTeX local.
+/rapport/
