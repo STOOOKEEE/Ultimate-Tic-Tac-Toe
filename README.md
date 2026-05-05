@@ -16,7 +16,7 @@ The subject also imposes an important constraint: the AI must not use a move dic
 
 ## The Solution
 
-This project implements a single strong AI method inspired by the public repository [`jojo2504/ultimate-tic-tac-toe`](https://github.com/jojo2504/ultimate-tic-tac-toe).
+This project implements a single strong AI method designed around time-limited adversarial search.
 
 The AI uses:
 
@@ -177,7 +177,6 @@ cargo build --release
 
 - Course subject: `IA-5.pdf`
 - Rules reference: https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe
-- Strong engine inspiration: https://github.com/jojo2504/ultimate-tic-tac-toe
 
 ## Notes
 
