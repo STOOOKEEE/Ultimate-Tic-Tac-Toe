@@ -2,7 +2,7 @@
 
 AI agent for Ultimate Tic Tac Toe, built in Rust for the **Fondement de l'IA** course with Christophe Rodrigues.
 
-Built by [Sofiane Ben Taleb](https://github.com/gamween), [Ramzy Chibani](https://github.com/DZ-Ramzy) and [Armand Séchon](https://github.com/STOOOKEEE).
+Built by [Sofiane Ben Taleb](https://github.com/gamween), [Ramzy Chibani](https://github.com/DZ-Ramzy), Paul Evesque and [Armand Séchon](https://github.com/STOOOKEEE).
 
 ---
 
@@ -12,7 +12,7 @@ Ultimate Tic Tac Toe is much harder to solve than classic Tic Tac Toe. The board
 
 The assignment requires an AI that can play complete matches without bugs, respect the official rules, and make decisions quickly enough during timed battles. Brute force is not realistic: the game tree is too large, and the quality of the AI depends on the balance between search depth, evaluation quality and execution speed.
 
-The subject also imposes an important constraint: the AI must not use a move dictionary. Every decision must be computed from the current board state.
+The project also imposes an important constraint: the AI must not use a move dictionary. Every decision must be computed from the current board state.
 
 ## The Solution
 
@@ -26,11 +26,11 @@ The AI uses:
 - **Bitboard move generation** for fast legal move computation
 - **NNUE-style evaluation weights** stored in `databin/gen160_weights.bin`
 
-There is no fallback heuristic and no move dictionary. Legal moves are generated from the current board, then evaluated through search.
+There is no move dictionary or hard-coded opening book. Legal moves are generated from the current board, then evaluated through search and the NNUE-style position evaluator.
 
 ## Rules Implemented
 
-The implementation follows the rules from `IA-5.pdf` and the standard Ultimate Tic Tac Toe rules described on [Wikipedia](https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe):
+The implementation follows the project rules and the standard Ultimate Tic Tac Toe rules described on [Wikipedia](https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe):
 
 - The game is played on a 9x9 grid, divided into nine 3x3 local boards.
 - Players alternate turns. `X` starts.
@@ -39,7 +39,7 @@ The implementation follows the rules from `IA-5.pdf` and the standard Ultimate T
 - If the forced local board is already won or full, the next player may play in any playable local board.
 - A won or full local board cannot receive new moves.
 - A player wins by winning three local boards aligned on the global board.
-- If the board is full and no global alignment exists, the subject tie-break is applied: the player with the most won local boards wins. If both players won the same number of local boards, the game is a draw.
+- If the board is full and no global alignment exists, the project tie-break is applied: the player with the most won local boards wins. If both players won the same number of local boards, the game is a draw.
 
 ## How It Works
 
@@ -75,7 +75,7 @@ Best legal move: column row
 
 ## Why This Approach
 
-The subject recommends Minimax with Alpha-Beta pruning, while warning that exploring the full tree is not practical. Wikipedia also highlights that Ultimate Tic Tac Toe is difficult for computers because it has a large branching factor and no simple universal evaluation function.
+The project recommends Minimax with Alpha-Beta pruning, while warning that exploring the full tree is not practical. Wikipedia also highlights that Ultimate Tic Tac Toe is difficult for computers because it has a large branching factor and no simple universal evaluation function.
 
 Our implementation addresses this with a time-limited search engine: iterative deepening searches progressively deeper and always keeps the best completed result. Alpha-Beta pruning removes branches that cannot improve the decision. The transposition table avoids recomputing equivalent states. The NNUE-style evaluator replaces a hand-written tactical score with a stronger position evaluation.
 
@@ -110,10 +110,20 @@ Ultimate-Tic-Tac-Toe/
 │   └── constants.rs   # Bitboard masks and constants
 ├── databin/
 │   └── gen160_weights.bin
-├── IA-5.pdf
 ├── Cargo.toml
 └── README.md
 ```
+
+## Team Responsibilities
+
+The work was reviewed and integrated collectively, with the following main responsibilities:
+
+| Member | Main contribution |
+|------|------------|
+| Armand Séchon | Negamax/Minimax search, Alpha-Beta pruning, transposition table, optimized search representation |
+| Ramzy Chibani | Neural-network evaluation, NNUE accumulator, weight loading and quantized forward pass |
+| Sofiane Ben Taleb | AI integration, rule-board to engine adapter, time budget handling, documentation cleanup |
+| Paul Evesque | Rule validation, forced-grid behavior, finished-board scenarios, tests and report review |
 
 ## Getting Started
 
@@ -175,7 +185,7 @@ cargo build --release
 
 ## Sources
 
-- Course subject: `IA-5.pdf`
+- Project brief for the Fondement de l'IA course
 - Rules reference: https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe
 
 ## Notes
