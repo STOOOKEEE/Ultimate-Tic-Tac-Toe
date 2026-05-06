@@ -1,0 +1,326 @@
+\documentclass{pssbmac}
+
+\usepackage[french]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{float}
+\usepackage{graphics}
+\usepackage{graphicx}
+\usepackage{epsfig}
+\usepackage{indentfirst}
+\usepackage{amsmath, amsfonts, amssymb, amsthm, mathtools}
+\usepackage{url}
+\usepackage{csquotes}
+\usepackage[table]{xcolor}
+\usepackage{listings}
+
+\definecolor{ReportBlue}{RGB}{28, 72, 128}
+\definecolor{CodeBackground}{RGB}{247, 249, 252}
+\definecolor{CodeFrame}{RGB}{190, 204, 222}
+\definecolor{CodeLine}{RGB}{110, 120, 135}
+\definecolor{TableHeader}{RGB}{230, 238, 248}
+
+\lstdefinestyle{codeexcerpt}{
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{CodeBackground},
+    frame=single,
+    framerule=0.4pt,
+    rulecolor=\color{CodeFrame},
+    numbers=left,
+    numberstyle=\tiny\color{CodeLine},
+    numbersep=0.9em,
+    xleftmargin=2.8em,
+    framexleftmargin=2.4em,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    captionpos=t
+}
+\renewcommand{\lstlistingname}{Extrait de code}
+\renewcommand{\lstlistlistingname}{Extraits de code}
+
+\makeatletter
+\renewcommand{\ps@headreport}
+{ \renewcommand{\@oddhead}
+  {\begin{minipage}{\textwidth}
+     {\normalsize {\bf ESILV -- Groupe FISEA}\hfill Mai 2026}\\
+     \textcolor{ReportBlue}{\rule{\textwidth}{0.6pt}}
+   \end{minipage}
+  }
+  \renewcommand{\@oddfoot}{\hfil\thepage\hfil}
+  \renewcommand{\@evenhead}{\@oddhead}
+  \renewcommand{\@evenfoot}{\@oddfoot}
+}
+\makeatother
+\pagestyle{headreport}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}{Remark}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+\begin{document}
+
+\title{Ultimate Tic Tac Toe : IA de recherche adversariale}
+
+\author{
+    {\large Sofiane Ben Taleb, Ramzy Chibani, Paul Evesque, Armand Séchon}\\ [1em]
+    {\normalsize Fondement de l'IA -- Christophe Rodrigues}
+}
+\criartitulo
+
+\begin{abstract}
+{\bf Résumé.} Ce rapport présente notre implémentation d'une intelligence artificielle pour l'Ultimate Tic Tac Toe. Le projet consiste à permettre à un joueur d'affronter l'IA, respecter les règles du jeu, produire les coups au format colonne-ligne et calculer chaque décision à la volée, sans dictionnaire de coups. Nous décrivons la modélisation du jeu comme problème de recherche adversariale : joueurs Max/Min, état initial, actions légales, résultat d'une action, test terminal et utilité. Notre solution repose sur une recherche de type Negamax, équivalente à Minimax pour les jeux à somme nulle, avec élagage Alpha-Beta, approfondissement itératif, table de transposition et génération rapide des coups par bitboards. L'évaluation des positions est réalisée par un réseau de type NNUE intégré au moteur. L'objectif principal est d'obtenir un compromis robuste entre qualité stratégique et temps de calcul par coup.
+
+\noindent
+{\bf Mots-clés.} Ultimate Tic Tac Toe, Minimax, Negamax, Alpha-Beta, bitboard, table de transposition, iterative deepening, NNUE.
+\end{abstract}
+
+\section{Objectif du projet}
+
+Le projet demande de développer une IA capable de jouer à l'Ultimate Tic Tac Toe contre d'autres IA. Le programme doit proposer une interface texte, permettre de choisir si l'IA ou le joueur commence, afficher la grille, accepter les coups au format \texttt{colonne ligne} et calculer les coups de l'IA automatiquement.
+
+La contrainte algorithmique principale est l'utilisation d'une méthode de recherche de type Minimax, idéalement optimisée par un élagage Alpha-Beta. Les consignes interdisent explicitement les dictionnaires de coups : l'IA ne doit pas rejouer une base de positions pré-calculées, mais calculer sa décision à partir de l'état courant du plateau.
+
+Notre implémentation suit cette contrainte. Les coups légaux sont générés depuis le plateau courant, puis évalués par recherche. Le fichier \texttt{databin/gen160\_weights.bin} contient des poids d'évaluation, mais ne contient pas de séquence de coups imposée.
+
+\section{Règles implémentées}
+
+L'Ultimate Tic Tac Toe se joue sur une grille de 9 par 9, divisée en neuf grilles locales de morpion. Chaque coup est décrit par une colonne et une ligne, numérotées de 1 à 9. Le joueur \texttt{X} commence.
+
+Après un coup, la position locale jouée dans la petite grille impose la petite grille dans laquelle l'adversaire devra jouer. Par exemple, si un joueur joue dans la case centrale d'une petite grille, l'adversaire est envoyé vers la petite grille centrale du plateau global. Si cette grille cible est déjà gagnée ou pleine, le joueur suivant peut jouer dans n'importe quelle grille encore disponible.
+
+Une petite grille est gagnée lorsqu'un joueur y aligne trois symboles. Une fois gagnée ou pleine, elle ne peut plus recevoir de nouveau coup. La partie est remportée lorsqu'un joueur gagne trois petites grilles alignées sur le plateau global. Si toutes les petites grilles sont terminées sans alignement global, le règlement prévoit un départage : le joueur ayant gagné le plus de petites grilles remporte la partie. En cas d'égalité sur ce nombre, la partie est déclarée nulle.
+
+Ces règles sont centralisées dans \texttt{src/game.rs}. Les tests vérifient notamment la grille imposée, la libération du coup lorsque la grille cible est terminée, l'interdiction de jouer dans une grille décidée, la victoire globale et le départage final.
+
+\section{Modélisation du jeu adversarial}
+
+Le jeu est modélisé comme un problème de recherche adversariale à deux joueurs. Les notions classiques de joueurs Max/Min, d'état initial, d'actions, de transition, de test terminal et d'utilité sont toutes présentes dans le code, avec des noms adaptés aux conventions Rust du projet.
+
+\begin{center}
+\small
+\begin{tabular}{p{0.27\linewidth}p{0.64\linewidth}}
+\hline
+\rowcolor{TableHeader}
+\textbf{Notion} & \textbf{Implémentation dans le projet} \\
+\hline
+Joueurs Max et Min & Dans l'interface de règles, les joueurs sont \texttt{Player::X} et \texttt{Player::O} dans \texttt{src/game.rs}. Dans le moteur optimisé, ils sont représentés par \texttt{Symbol::Cross} et \texttt{Symbol::Circle} dans \texttt{src/core.rs}. Le joueur Max est le joueur au trait dans l'appel courant de Negamax ; le joueur Min est son adversaire, obtenu par \texttt{opponent()} ou \texttt{swap()}. \\
+\texttt{s0} & L'état initial est créé par \texttt{Board::new()} dans \texttt{src/game.rs} pour l'interface officielle, et par \texttt{TicTacToe::new()} dans \texttt{src/core.rs} pour le moteur bitboard. Dans les deux cas, le plateau est vide, le joueur \texttt{X}/\texttt{Cross} commence et aucune petite grille n'est imposée. \\
+\texttt{Actions(s)} & Les coups légaux sont produits par \texttt{Board::get\_available\_moves()} dans \texttt{src/game.rs}. Le moteur utilise la version bitboard \texttt{generate\_moves(board)} dans \texttt{src/movegen.rs}, qui retourne un masque \texttt{u128} des cases jouables. \\
+\texttt{Result(s,a)} & L'application d'une action est faite par \texttt{Board::make\_move(column, row)} dans \texttt{src/game.rs}. Pour la recherche, \texttt{TicTacToe::make(square)} dans \texttt{src/core.rs} produit l'état enfant en modifiant les bitboards, le joueur courant, la grille imposée, la clé de hachage et les informations de grilles terminées. \\
+\texttt{Terminal-test(s)} & \texttt{Board::is\_terminal()} appelle \texttt{Board::outcome()} dans \texttt{src/game.rs}. Le moteur bitboard utilise \texttt{TicTacToe::is\_game\_over()} dans \texttt{src/core.rs}, qui combine victoire globale et plateau terminé. \\
+\texttt{Utility(s,j)} & La valeur finale est calculée dans les branches terminales de \texttt{Search::negamax()} et \texttt{Search::negamax\_exact()} dans \texttt{src/search.rs}. Les scores sont normalisés : \texttt{1.0} pour une victoire du point de vue racine après inversion Negamax, \texttt{0.5} pour un nul et \texttt{0.0} pour une défaite. La recherche non exacte ajoute un très faible bonus temporel \texttt{0.0001 * (81 - ply)} afin de préférer les victoires plus rapides et de retarder les défaites. \\
+\hline
+\end{tabular}
+\end{center}
+
+Les deux signatures suivantes résument les fonctions de règles les plus importantes :
+
+\begin{lstlisting}[style=codeexcerpt,caption={Fonctions de règles principales dans \texttt{src/game.rs}}]
+pub(crate) fn get_available_moves(&self) -> Vec<Move>
+pub(crate) fn make_move(&mut self, column: usize, row: usize) -> bool
+\end{lstlisting}
+
+La recherche applique ensuite la relation de récurrence Minimax sous forme Negamax. L'inversion de point de vue apparaît explicitement dans \texttt{src/search.rs} :
+
+\begin{lstlisting}[style=codeexcerpt,caption={Inversion de point de vue Negamax dans \texttt{src/search.rs}}]
+let score = 1.0 - self.negamax(&child, depth - 1,
+                               1.0 - beta, 1.0 - alpha,
+                               net, child_acc, stop);
+\end{lstlisting}
+
+\section{Gestion des petites grilles terminées}
+
+La fin d'une petite grille est un point critique de l'Ultimate Tic Tac Toe, car elle change à la fois les coups autorisés, l'affichage et la condition de victoire globale.
+
+Dans la couche officielle \texttt{src/game.rs}, la fonction \texttt{update\_local\_status(macro\_idx)} vérifie les huit alignements possibles d'une petite grille grâce à \texttt{WIN\_LINES}. Si un joueur possède trois cases alignées, la petite grille devient \texttt{MacroState::Player(player)}. Si aucune victoire locale n'est trouvée et que les neuf cases sont occupées, elle devient \texttt{MacroState::Draw}. Ensuite, \texttt{make\_move()} interdit tout nouveau coup dans une grille dont l'état n'est plus \texttt{MacroState::Empty}.
+
+\begin{lstlisting}[style=codeexcerpt,caption={Rejet d'un coup dans une petite grille terminée dans \texttt{src/game.rs}}]
+if self.macros[macro_idx] != MacroState::Empty {
+    return false;
+}
+\end{lstlisting}
+
+\subsection{Choix de la prochaine grille}
+
+La prochaine grille imposée est déterminée par la position locale du coup joué. Le fichier \texttt{src/game.rs} convertit d'abord les coordonnées globales \texttt{colonne, ligne} en deux indices : \texttt{macro\_idx}, la petite grille dans laquelle le joueur vient de jouer, et \texttt{micro\_idx}, la case locale à l'intérieur de cette petite grille.
+
+\begin{lstlisting}[style=codeexcerpt,caption={Conversion d'un coup global en indices local/global dans \texttt{src/game.rs}}]
+Some(((row / 3) * 3 + (column / 3),
+      (row % 3) * 3 + (column % 3)))
+\end{lstlisting}
+
+Après le coup, \texttt{micro\_idx} devient l'indice de la petite grille cible pour l'adversaire. Par exemple, jouer dans la case locale en haut à droite envoie l'adversaire dans la petite grille globale en haut à droite. Si cette grille cible est encore libre, elle devient \texttt{active\_macro}. Si elle est déjà gagnée ou nulle, \texttt{active\_macro} vaut \texttt{None}, ce qui libère le joueur suivant : il peut jouer dans n'importe quelle petite grille non terminée.
+
+\begin{lstlisting}[style=codeexcerpt,caption={Mise à jour de la grille imposée dans \texttt{src/game.rs}}]
+self.active_macro = if self.macros[micro_idx] == MacroState::Empty {
+    Some(micro_idx)
+} else {
+    None
+};
+\end{lstlisting}
+
+Dans le moteur optimisé, la même idée est représentée par des bits. Dans \texttt{src/core.rs}, \texttt{all\_clear} mémorise les petites grilles gagnées, \texttt{full\_subboard} les petites grilles pleines sans victoire, et \texttt{current\_focus} la grille imposée. Le générateur \texttt{src/movegen.rs} exclut toujours les grilles terminées avec le masque \texttt{full\_subboard | all\_clear}. Si la grille imposée est terminée, le générateur repasse automatiquement en choix libre sur les autres grilles jouables.
+
+\begin{lstlisting}[style=codeexcerpt,caption={Filtrage des petites grilles terminées dans \texttt{src/movegen.rs}}]
+(board.full_subboard | board.all_clear) & (1 << sb) == 0
+\end{lstlisting}
+
+Enfin, la victoire globale est détectée sur les neuf états de petites grilles. Dans \texttt{src/game.rs}, \texttt{macro\_winner()} teste les mêmes huit lignes que pour une grille locale, mais sur le plateau global. Si toutes les petites grilles sont terminées sans alignement global, \texttt{Board::outcome()} applique le départage demandé : le joueur ayant gagné le plus de petites grilles remporte la partie, sinon le résultat est nul.
+
+\section{Architecture du code}
+
+Le projet est écrit en Rust afin d'obtenir de bonnes performances sur une recherche de jeu combinatoire. Le code est organisé autour de deux représentations complémentaires du plateau.
+
+La première représentation, dans \texttt{src/game.rs}, correspond directement aux règles du projet. Elle valide les coups utilisateur, maintient le joueur courant, suit la grille active et détecte les fins de partie. Cette couche est utilisée par l'interface et garantit que les règles officielles sont respectées.
+
+La seconde représentation, dans \texttt{src/core.rs}, est optimisée pour la recherche. Elle utilise des bitboards pour représenter rapidement les cases occupées, les petites grilles gagnées ou pleines, et la grille imposée. Le module \texttt{src/strong.rs} joue le rôle d'adaptateur entre ces deux mondes : il reconstruit l'état bitboard depuis l'historique des coups validés par le moteur de règles.
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+\rowcolor{TableHeader}
+\textbf{Fichier} & \textbf{Rôle} \\
+\hline
+\texttt{src/cli.rs} & Interface texte et modes de jeu \\
+\texttt{src/game.rs} & Règles officielles et état principal \\
+\texttt{src/coords.rs} & Conversion des coordonnées utilisateur \\
+\texttt{src/ai.rs} & Point d'entrée unique de l'IA \\
+\texttt{src/strong.rs} & Adaptateur vers le moteur fort \\
+\texttt{src/core.rs} & Représentation bitboard \\
+\texttt{src/movegen.rs} & Génération des coups légaux \\
+\texttt{src/search.rs} & Recherche Negamax / Alpha-Beta \\
+\texttt{src/network.rs} & Évaluation NNUE \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Algorithme de décision}
+
+L'IA utilise une recherche Negamax, formulation compacte de Minimax adaptée aux jeux à deux joueurs et à somme nulle. À chaque niveau de recherche, les coups légaux sont générés, appliqués sur un état enfant, puis évalués du point de vue du joueur courant.
+
+L'élagage Alpha-Beta permet d'éviter l'exploration de branches qui ne peuvent plus améliorer la décision finale. Cette optimisation est essentielle dans l'Ultimate Tic Tac Toe, car le facteur de branchement rend l'exploration exhaustive impraticable.
+
+La recherche est aussi limitée par le temps grâce à l'approfondissement itératif. Le moteur calcule d'abord à profondeur 1, puis 2, puis 3, et ainsi de suite tant que le budget de temps le permet. Cette méthode garantit qu'un coup légal et déjà évalué est disponible même si le temps est court. Le programme utilise par défaut un budget de 2 secondes par coup dans les modes classiques, et permet de régler ce budget en mode tournoi.
+
+\section{Heuristiques, pondérations et optimisations}
+
+Les consignes recommandent de ne pas explorer tout l'arbre et de développer une heuristique d'évaluation. Notre moteur combine une heuristique apprise avec plusieurs optimisations de recherche. Les principales briques sont les suivantes.
+
+\begin{center}
+\small
+\begin{tabular}{p{0.28\linewidth}p{0.63\linewidth}}
+\hline
+\rowcolor{TableHeader}
+\textbf{Mécanisme} & \textbf{Emplacement et rôle} \\
+\hline
+Élagage Alpha-Beta & Implémenté dans \texttt{Search::negamax()} et \texttt{Search::negamax\_exact()} dans \texttt{src/search.rs}. Les bornes \(\alpha\) et \(\beta\) sont propagées sous forme Negamax avec \texttt{1.0 - beta} et \texttt{1.0 - alpha}. Dès que \(\alpha \geq \beta\), la branche est coupée. \\
+Approfondissement itératif & \texttt{iterative\_deepening\_think()} dans \texttt{src/search.rs} lance successivement les profondeurs 1, 2, 3, etc. jusqu'à l'expiration du budget. Les modes classiques utilisent 2 secondes par coup dans \texttt{src/cli.rs}; le mode tournoi demande un budget en millisecondes, avec 2000 ms par défaut. \\
+Table de transposition & \texttt{Search} contient une table \texttt{HashMap} indexée par une clé \texttt{u128} dans \texttt{src/search.rs}. Chaque entrée stocke une profondeur, une valeur et un type de borne : \texttt{Exact}, \texttt{LowerBound} ou \texttt{UpperBound}. La clé vient du hachage Zobrist maintenu dans \texttt{src/core.rs}. \\
+Bitboards & \texttt{src/core.rs}, \texttt{src/constants.rs} et \texttt{src/movegen.rs}. Les 81 cases sont stockées dans un \texttt{u128}; les neuf petites grilles terminées tiennent dans des \texttt{u16}. Les alignements locaux et globaux sont testés par masques binaires. \\
+Parallélisation racine & \texttt{Search::think()} dans \texttt{src/search.rs} utilise \texttt{rayon} et \texttt{par\_iter()} pour évaluer les coups racine en parallèle. Cela accélère le choix initial sans changer la définition de l'algorithme. \\
+Recherche exacte de fin de partie & \texttt{endgame\_trigger()} dans \texttt{src/search.rs} bascule vers \texttt{think\_exact()} si moins de 35 cases sont vides, ou si au moins 4 petites grilles sont terminées et moins de 45 cases restent vides. Dans \texttt{src/strong.rs}, ce calcul exact reçoit au plus 500 ms du budget courant. \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Évaluation NNUE}
+
+Lorsque la profondeur courante est atteinte avant une fin de partie, \texttt{Search::negamax()} appelle \texttt{Network::forward()} dans \texttt{src/network.rs}. Le réseau produit une valeur entre 0 et 1 grâce à une sigmoïde : plus la valeur est proche de 1, plus la position est favorable au joueur au trait.
+
+Les pondérations sont stockées dans \texttt{databin/gen160\_weights.bin}. Ce fichier n'est pas un dictionnaire de coups : il ne contient pas de positions à rejouer, seulement les poids numériques d'une fonction d'évaluation. La structure du réseau est explicite dans \texttt{src/network.rs} :
+
+\begin{itemize}
+    \item \texttt{FEATURES\_COUNT = 199} dans \texttt{src/constants.rs}.
+    \item \texttt{N\_BUCKETS = 4} pour adapter l'évaluation à l'avancement de la partie avec \texttt{get\_bucket(ply)}.
+    \item première couche accumulée : \(199 \rightarrow 128\).
+    \item couche cachée : \(128 \rightarrow 64\).
+    \item sortie : \(64 \rightarrow 1\), avec 4 sorties pondérées selon le bucket de partie.
+    \item quantification : \texttt{QA = 256} et \texttt{QB = 64}.
+\end{itemize}
+
+Le nombre total de paramètres lus depuis le fichier de poids est :
+
+\[
+128 \times 199 + 128 + 64 \times 128 + 64 + 4 \times 64 + 4 = 34116
+\]
+
+Les 199 caractéristiques se répartissent de manière professionnelle autour de l'information utile au jeu : 81 cases pour les pions du joueur au trait, 81 cases pour les pions adverses, 9 petites grilles gagnées par le joueur au trait, 9 gagnées par l'adversaire, 9 petites grilles terminées, 9 possibilités de grille imposée et 1 indicateur de choix libre. Cette représentation se trouve dans \texttt{DualAccumulator::new()} et \texttt{DualAccumulator::apply\_delta()} dans \texttt{src/network.rs}. L'accumulateur est mis à jour après chaque coup au lieu de recalculer toutes les caractéristiques, ce qui économise du temps à chaque noeud de recherche.
+
+\subsection{Valeurs terminales}
+
+Les valeurs terminales sont volontairement simples et stables. Dans la recherche exacte, \texttt{src/search.rs} utilise \texttt{0.0} pour une défaite du joueur au trait, \texttt{0.5} pour un nul et \texttt{1.0} pour une victoire après inversion Negamax. Dans la recherche avec profondeur limitée, une petite pondération temporelle est ajoutée :
+
+\begin{lstlisting}[style=codeexcerpt,caption={Valeurs terminales utilisées par \texttt{src/search.rs}}]
+Result::Win => 0.0 - 0.0001 * ((81 - board.ply) as f32)
+Result::Draw => 0.5
+\end{lstlisting}
+
+Comme le parent calcule \texttt{1.0 - score}, ce terme fait préférer une victoire plus rapide. Il reste volontairement très faible par rapport à l'écart principal entre victoire, nul et défaite.
+
+La règle de départage, lorsqu'aucun alignement global n'existe et que toutes les petites grilles sont terminées, est implémentée dans \texttt{Board::outcome()} dans \texttt{src/game.rs}. Le moteur bitboard utilisé par la recherche traite ce cas terminal comme un nul au niveau de \texttt{TicTacToe::check\_draw()}. En pratique, l'interface et le résultat de partie affiché respectent donc le départage, tandis que l'évaluation interne de recherche pourrait encore être améliorée pour optimiser explicitement ce critère en fin de partie.
+
+\section{Conformité aux consignes}
+
+Notre solution respecte les points principaux du projet. Le programme permet de jouer contre l'IA, de choisir le joueur qui commence, de saisir les coups au format colonne-ligne et d'afficher la grille en mode texte. Il propose aussi un mode tournoi qui imprime uniquement le coup de l'IA au format attendu.
+
+Sur le plan algorithmique, l'IA repose bien sur une recherche adversariale de type Minimax/Negamax avec élagage Alpha-Beta. Les décisions sont calculées à la volée depuis l'état courant. Aucun dictionnaire de coups n'est utilisé. Les poids NNUE servent uniquement à évaluer une position lorsque la recherche atteint sa limite de profondeur ou de temps.
+
+La règle de départage demandée est également implémentée : lorsqu'aucun joueur n'a gagné globalement et que toutes les petites grilles sont terminées, le joueur ayant gagné le plus de petites grilles est déclaré vainqueur.
+
+\section{Tests et validation}
+
+Nous avons ajouté des tests unitaires sur les règles critiques. Ces tests couvrent la conversion des coordonnées, la restriction vers la grille imposée, la libération du choix lorsque la grille cible est gagnée ou pleine, l'interdiction de jouer dans une grille déjà décidée, la détection des victoires locales et globales, ainsi que le départage final.
+
+Les commandes de validation utilisées sont les suivantes :
+
+\begin{lstlisting}[style=codeexcerpt,caption={Commandes de validation du projet}]
+cargo fmt -- --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release
+\end{lstlisting}
+
+L'exécution en mode \texttt{--release} est importante pour les combats entre IA, car la qualité du coup dépend directement du nombre de positions explorées dans le temps disponible.
+
+\section{Limites et perspectives}
+
+La principale limite du moteur est le compromis entre profondeur de recherche et temps de calcul. Un budget plus élevé permet de terminer davantage de profondeurs, mais ralentit les parties. Pour un tournoi, un budget d'environ 2 secondes par coup constitue un bon compromis si le règlement l'autorise.
+
+Une autre limite vient de l'évaluation NNUE : elle améliore la qualité positionnelle, mais elle reste une approximation. Dans certaines positions tactiques très forcées, une recherche plus profonde peut être nécessaire. Le moteur prévoit donc une recherche exacte en fin de partie lorsque le nombre de cases restantes devient plus faible.
+
+\section{Répartition du travail}
+
+La répartition suivante résume les responsabilités fonctionnelles du rendu. Plusieurs parties ont été relues, testées et intégrées collectivement, mais chaque membre a porté un périmètre principal.
+
+\begin{center}
+\small
+\begin{tabular}{p{0.24\linewidth}p{0.67\linewidth}}
+\hline
+\rowcolor{TableHeader}
+\textbf{Membre} & \textbf{Contribution principale} \\
+\hline
+Armand Séchon & Implémentation de la recherche adversariale : formulation Negamax/Minimax, propagation des bornes Alpha-Beta, table de transposition et logique de recherche en profondeur dans \texttt{src/search.rs}. Il a aussi participé à la représentation optimisée utilisée par cette recherche dans \texttt{src/core.rs}, \texttt{src/constants.rs} et \texttt{src/movegen.rs}. \\
+Ramzy Chibani & Mise en place de l'évaluation par réseau de neurones : chargement des poids, quantification, propagation avant, accumulateur NNUE et mise à jour incrémentale des caractéristiques dans \texttt{src/network.rs}. Les pondérations utilisées par cette évaluation sont stockées dans \texttt{databin/gen160\_weights.bin}. \\
+Sofiane Ben Taleb & Intégration de l'IA dans l'application : point d'entrée public de l'IA, adaptation entre le plateau de règles et le moteur optimisé, gestion du budget de temps et cohérence du coup retourné. Les fichiers principaux sont \texttt{src/ai.rs}, \texttt{src/strong.rs}, ainsi que la documentation finale dans \texttt{README.md}. \\
+Paul Evesque & Règles de jeu, validation et qualité du rendu : vérification des scénarios de partie, comportement des petites grilles terminées, choix de la prochaine grille, tests de non-régression et relecture du compte-rendu. Les points concernés se retrouvent notamment dans \texttt{src/game.rs}, \texttt{src/coords.rs}, \texttt{src/movegen.rs} et les tests associés. \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Conclusion}
+
+Ce projet fournit une IA d'Ultimate Tic Tac Toe robuste, conforme aux règles demandées et construite autour d'une méthode de décision adversariale claire. Les états, actions, résultats, tests terminaux et utilités sont identifiables dans les modules de règles et de recherche. L'utilisation de Rust, des bitboards, de l'élagage Alpha-Beta, de l'approfondissement itératif, d'une table de transposition et d'une évaluation NNUE permet d'obtenir une IA rapide et compétitive. Le moteur ne s'appuie pas sur un dictionnaire de coups : chaque décision est calculée dynamiquement à partir de la position courante.
+
+\section*{Sources}
+
+\begin{itemize}
+    \item Consignes du projet, Fondement de l'IA.
+    \item Règles générales : \url{https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe}
+\end{itemize}
+
+\end{document}
